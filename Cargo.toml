@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/wavscat-core", "crates/wavscat-wasm", "crates/tapvid", "crates/wavscat-py"]
+members = ["crates/wavscat-core", "crates/wavscat-wasm", "crates/wavscat-py"]
 
 [workspace.package]
 version = "0.1.0-dev"

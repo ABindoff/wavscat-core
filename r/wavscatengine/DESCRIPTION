@@ -1,5 +1,5 @@
 Package: wavscatengine
-Title: Rust Engine for 'wavscat': Bit-Identical Scattering and Tapping Features
+Title: Rust Engine for 'wavscat': Bit-Identical Scattering Features
 Version: 0.1.0.9000
 Authors@R: c(
     person("Aidan", "D. Bindoff", email = "aidan.bindoff@utas.edu.au",
@@ -9,9 +9,7 @@ Authors@R: c(
 Description: The compiled engine behind 'wavscat'. It computes wavelet
     scattering and joint time-frequency scattering with the same Rust core
     used from Python and in the browser, so features are bit-for-bit
-    identical across languages and platforms. It also runs the webcam
-    finger-tapping pipeline: frames in, quality control and features out.
-    'wavscat' uses this package automatically when it is installed and
+    identical across languages and platforms. 'wavscat' uses this package automatically when it is installed and
     falls back to its own pure R engine otherwise.
 License: BSD_3_clause + file LICENSE
 Encoding: UTF-8

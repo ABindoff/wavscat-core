@@ -1,6 +1,6 @@
 [package]
 name = "wavscat-wasm"
-description = "WebAssembly bindings for wavscat-core and tapvid: bit-identical scattering and tapping features in the browser"
+description = "WebAssembly bindings for wavscat-core: bit-identical scattering features in the browser"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wavscat-core = { path = "../wavscat-core" }
-tapvid = { path = "../tapvid", features = ["serde"] }
 # Pinned to the exact version of the wasm-bindgen CLI used to generate the
 # JavaScript glue; the two must match.
 wasm-bindgen = "=0.2.129"

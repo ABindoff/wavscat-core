@@ -26,11 +26,11 @@ jobs:
         with:
           components: clippy
       - name: Tests, optimised
-        run: cargo test --release -p wavscat-core -p tapvid
+        run: cargo test --release -p wavscat-core
       - name: Golden record, unoptimised
-        run: cargo test -p wavscat-core -p tapvid --test golden
+        run: cargo test -p wavscat-core --test golden
       - name: No platform transcendental functions
-        run: cargo clippy -p wavscat-core -p tapvid --all-targets -- -D clippy::disallowed_methods
+        run: cargo clippy -p wavscat-core --all-targets -- -D clippy::disallowed_methods
 
   wasi:
     name: wasm32-wasip1 under Node
@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: 24
       - name: Build the golden test
-        run: cargo test --release --target wasm32-wasip1 -p wavscat-core -p tapvid --test golden --no-run
+        run: cargo test --release --target wasm32-wasip1 -p wavscat-core --test golden --no-run
       - name: Run it under WASI
         shell: bash
         run: |
@@ -56,7 +56,7 @@ jobs:
       - name: Build the golden test with SIMD
         env:
           RUSTFLAGS: -C target-feature=+simd128
-        run: cargo test --release --target wasm32-wasip1 -p wavscat-core -p tapvid --test golden --no-run --target-dir target/simd
+        run: cargo test --release --target wasm32-wasip1 -p wavscat-core --test golden --no-run --target-dir target/simd
       - name: Run it under WASI, SIMD build
         shell: bash
         run: |
@@ -86,7 +86,7 @@ jobs:
       - name: Build the wasm module
         run: sh tools/build-wasm.sh
       - name: Node tests of the binding
-        run: node --test crates/wavscat-wasm/js/test-node.mjs crates/wavscat-wasm/js/test-tapping.mjs
+        run: node --test crates/wavscat-wasm/js/test-node.mjs
       - name: Install Playwright browsers
         working-directory: crates/wavscat-wasm/js
         run: |

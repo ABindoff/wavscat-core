@@ -57,9 +57,9 @@ pub fn signal(n: usize, seed: u64) -> Vec<f64> {
 
 fn cases_1d() -> Vec<(&'static str, Params1d, u64)> {
     let p = |n, j, q: Vec<u32>| Params1d::new(n, j, q);
-    let mut tapping = p(1800, 8, vec![8, 1]);
-    tapping.t_sec = Some(1.0);
-    tapping.sr = Some(30.0);
+    let mut kinematic = p(1800, 8, vec![8, 1]);
+    kinematic.t_sec = Some(1.0);
+    kinematic.sr = Some(30.0);
     let mut global = p(2048, 6, vec![8, 1]);
     global.t = TSpec::Global;
     let mut unaveraged = p(1500, 6, vec![4, 2]);
@@ -69,7 +69,7 @@ fn cases_1d() -> Vec<(&'static str, Params1d, u64)> {
     let mut first = p(3000, 6, vec![12]);
     first.max_order = 1;
     vec![
-        ("tapping-1800-J8-Tsec1", tapping, 1),
+        ("kinematic-1800-J8-Tsec1", kinematic, 1),
         ("audio-32000-J9-Q8", p(32000, 9, vec![8]), 2),
         ("global-2048-J6", global, 3),
         ("unaveraged-1500-J6", unaveraged, 4),
@@ -129,7 +129,7 @@ pub fn golden_report() -> String {
         writeln!(out, "{name}\tcoefs\t{:016x}", hash(values)).unwrap();
     }
 
-    // The video tapping configuration, renormalised by S1: 30 s at 30 Hz.
+    // A 30 Hz movement configuration, renormalised by S1: 30 s at 30 Hz.
     let mut video = ParamsJtfs::new(900, 7, vec![8, 1]);
     video.time.t_sec = Some(6.0);
     video.time.sr = Some(30.0);

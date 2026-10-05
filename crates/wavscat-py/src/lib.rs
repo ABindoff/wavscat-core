@@ -1,4 +1,4 @@
-//! Python bindings for `wavscat-core` and `tapvid`.
+//! Python bindings for `wavscat-core`.
 //!
 //! A thin layer: every number is computed by the Rust core, so features
 //! computed here are bit-identical to those computed in R, in the browser or
@@ -18,13 +18,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-use tapvid::features::FeatureParams;
-use tapvid::ingest::{Ingest, IngestParams};
-use tapvid::pipeline::PipelineParams;
-use tapvid::qc::QcParams;
-use tapvid::report::trial_report;
-use tapvid::synth::{frame_times as synth_frame_times, FrameClock, TapSpec};
-use tapvid::synth_video::{Distractor, VideoSpec, VideoSynth};
 use wavscat_core::features::{self, Summary};
 use wavscat_core::jtfs::{self, Format, OutType, ParamsJtfs};
 use wavscat_core::scattering1d::{self as s1d, Params1d, TSpec};
@@ -45,9 +38,7 @@ fn numerics_version() -> &'static str {
 /// what every other supported platform computes.
 #[pyfunction]
 fn verify() -> Vec<String> {
-    let mut d: Vec<String> = wavscat_core::verify::verify().into_iter().map(|x| format!("wavscat-core: {x}")).collect();
-    d.extend(tapvid::verify::verify().into_iter().map(|x| format!("tapvid: {x}")));
-    d
+    wavscat_core::verify::verify().into_iter().map(|x| format!("wavscat-core: {x}")).collect()
 }
 
 /// `T` or `F`: None, a number of samples (0 for none), or "global".
@@ -300,121 +291,6 @@ fn summarise(values: PyReadonlyArray1<'_, f64>, how: &str) -> PyResult<f64> {
     Ok(features::summarise(f64_slice(&values)?, how))
 }
 
-/// One trial of webcam finger tapping, captured frame by frame. Only a small
-/// grid of each frame is kept; the raw frame is never stored.
-#[pyclass(module = "wavscat")]
-struct TappingSession {
-    ingest: Ingest,
-}
-
-/// The layout of a frame array: `(stride, width, height)` in elements of
-/// `channels` bytes.
-fn frame_layout(a: &PyReadonlyArrayDyn<'_, u8>, channels: usize) -> PyResult<(usize, usize, usize)> {
-    match (a.shape(), channels) {
-        ([h, w], 1) => Ok((*w, *w, *h)),
-        ([h, w, 4], 4) => Ok((4 * w, *w, *h)),
-        _ => Err(PyValueError::new_err(if channels == 1 {
-            "luma must be a 2-D uint8 array of height x width."
-        } else {
-            "rgba must be a uint8 array of height x width x 4."
-        })),
-    }
-}
-
-#[pymethods]
-impl TappingSession {
-    #[new]
-    #[pyo3(signature = (capacity=None, grid_width=None, grid_height=None))]
-    fn new(capacity: Option<usize>, grid_width: Option<usize>, grid_height: Option<usize>) -> PyResult<Self> {
-        let d = IngestParams::default();
-        let p = IngestParams {
-            capacity: capacity.unwrap_or(d.capacity),
-            grid_width: grid_width.unwrap_or(d.grid_width),
-            grid_height: grid_height.unwrap_or(d.grid_height),
-            ..d
-        };
-        Ok(TappingSession { ingest: Ingest::new(p).map_err(err)? })
-    }
-
-    /// Add a luma frame, a C-contiguous `height x width` uint8 array,
-    /// captured at `timestamp_us` microseconds.
-    fn push_frame(&mut self, luma: PyReadonlyArrayDyn<'_, u8>, timestamp_us: i64) -> PyResult<()> {
-        let (stride, w, h) = frame_layout(&luma, 1)?;
-        let data = luma.as_slice().map_err(|_| PyValueError::new_err("luma must be C-contiguous."))?;
-        self.ingest.push_frame(data, stride, w, h, timestamp_us).map_err(err)
-    }
-
-    /// Add an RGBA frame, a C-contiguous `height x width x 4` uint8 array.
-    fn push_rgba(&mut self, rgba: PyReadonlyArrayDyn<'_, u8>, timestamp_us: i64) -> PyResult<()> {
-        let (stride, w, h) = frame_layout(&rgba, 4)?;
-        let data = rgba.as_slice().map_err(|_| PyValueError::new_err("rgba must be C-contiguous."))?;
-        self.ingest.push_rgba(data, stride, w, h, timestamp_us).map_err(err)
-    }
-
-    /// Frames held.
-    #[getter]
-    fn frames(&self) -> usize {
-        self.ingest.len()
-    }
-
-    /// Analyse and gate the trial: a dict with `accepted`, `reasons`, `qc`,
-    /// `features` and `itis`, the last two only when accepted.
-    fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let report = trial_report(&self.ingest, &PipelineParams::default(), &QcParams::default(), &FeatureParams::default())
-            .map_err(err)?;
-        pythonize::pythonize(py, &report).map_err(err)
-    }
-
-    /// Discard every frame, ready for the next trial.
-    fn reset(&mut self) {
-        self.ingest.clear();
-    }
-}
-
-/// A synthetic tapping video with known taps, for demonstrations and tests.
-#[pyclass(module = "wavscat")]
-struct SyntheticVideo {
-    synth: VideoSynth,
-    work: Vec<f32>,
-}
-
-#[pymethods]
-impl SyntheticVideo {
-    #[new]
-    #[pyo3(signature = (width=320, height=240, iti_sd=0.0, seed=1, distractor_hz=None))]
-    fn new(width: usize, height: usize, iti_sd: f64, seed: u64, distractor_hz: Option<f64>) -> Self {
-        let spec = VideoSpec {
-            width,
-            height,
-            tap: TapSpec { iti_sd, seed, ..TapSpec::default() },
-            distractor: distractor_hz.map(|rate_hz| Distractor { rate_hz, displacement: 15.0, radius: 10.0, contrast: 90.0, centre: (0.8, 0.3) }),
-            seed,
-            ..VideoSpec::default()
-        };
-        SyntheticVideo { work: vec![0f32; width * height], synth: VideoSynth::new(spec) }
-    }
-
-    /// The frame captured at `t` seconds, a `height x width` uint8 array.
-    fn render<'py>(&mut self, py: Python<'py>, t: f64) -> PyResult<Bound<'py, PyArray2<u8>>> {
-        let (w, h) = (self.synth.spec().width, self.synth.spec().height);
-        let mut out = vec![0u8; w * h];
-        self.synth.render(t, &mut out, &mut self.work);
-        out.into_pyarray(py).reshape([h, w])
-    }
-
-    /// True tap times, in seconds.
-    fn taps<'py>(&self, py: Python<'py>) -> Bound<'py, PyArray1<f64>> {
-        self.synth.taps().to_vec().into_pyarray(py)
-    }
-}
-
-/// Capture times, in seconds, of a webcam clock with jitter and dropped frames.
-#[pyfunction]
-#[pyo3(signature = (duration, fps=30.0, jitter_sd=0.0, drop_prob=0.0, seed=2))]
-fn frame_times<'py>(py: Python<'py>, duration: f64, fps: f64, jitter_sd: f64, drop_prob: f64, seed: u64) -> Bound<'py, PyArray1<f64>> {
-    synth_frame_times(&FrameClock { fps, jitter_sd, drop_prob, seed }, duration).into_pyarray(py)
-}
-
 #[pymodule]
 fn wavscat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(numerics_version, m)?)?;
@@ -422,10 +298,7 @@ fn wavscat(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(log_compress, m)?)?;
     m.add_function(wrap_pyfunction!(eps_quantile, m)?)?;
     m.add_function(wrap_pyfunction!(summarise, m)?)?;
-    m.add_function(wrap_pyfunction!(frame_times, m)?)?;
     m.add_class::<Scattering1d>()?;
     m.add_class::<ScatteringJtfs>()?;
-    m.add_class::<TappingSession>()?;
-    m.add_class::<SyntheticVideo>()?;
     Ok(())
 }

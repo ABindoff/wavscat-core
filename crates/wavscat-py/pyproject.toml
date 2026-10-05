@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "wavscat"
-description = "Wavelet scattering and webcam finger-tapping features, bit-identical to R and the browser"
+description = "Wavelet scattering features, bit-identical to R and the browser"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.24"]
 license = { text = "BSD-3-Clause" }

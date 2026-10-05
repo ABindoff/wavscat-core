@@ -18,8 +18,6 @@
 //! const row = S.path(3);                 // one path's coefficients
 //! ```
 
-mod tapping;
-
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -43,9 +41,7 @@ pub fn numerics_version() -> String {
 /// device computes exactly what every other supported platform computes.
 #[wasm_bindgen]
 pub fn verify() -> Vec<String> {
-    let mut diffs: Vec<String> = wavscat_core::verify::verify().into_iter().map(|d| format!("wavscat-core: {d}")).collect();
-    diffs.extend(tapvid::verify::verify().into_iter().map(|d| format!("tapvid: {d}")));
-    diffs
+    wavscat_core::verify::verify().into_iter().map(|d| format!("wavscat-core: {d}")).collect()
 }
 
 /// The golden report itself, for diagnostics when `verify()` fails.

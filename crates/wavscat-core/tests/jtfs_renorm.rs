@@ -5,7 +5,7 @@ use wavscat_core::scattering1d::{Scattering1d, TSpec};
 use wavscat_core::verify::signal;
 
 fn params(f: TSpec, format: Format) -> ParamsJtfs {
-    // The video tapping configuration: 30 s at 30 Hz, 6 s averaging.
+    // A 30 Hz movement configuration: 30 s at 30 Hz, 6 s averaging.
     let mut p = ParamsJtfs::new(900, 7, vec![8, 1]);
     p.time.t_sec = Some(6.0);
     p.time.sr = Some(30.0);

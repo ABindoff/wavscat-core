@@ -4,9 +4,9 @@
 \name{wavscatengine-package}
 \alias{wavscatengine}
 \alias{wavscatengine-package}
-\title{wavscatengine: Rust Engine for 'wavscat': Bit-Identical Scattering and Tapping Features}
+\title{wavscatengine: Rust Engine for 'wavscat': Bit-Identical Scattering Features}
 \description{
-The compiled engine behind 'wavscat'. It computes wavelet scattering and joint time-frequency scattering with the same Rust core used from Python and in the browser, so features are bit-for-bit identical across languages and platforms. It also runs the webcam finger-tapping pipeline: frames in, quality control and features out. 'wavscat' uses this package automatically when it is installed and falls back to its own pure R engine otherwise.
+The compiled engine behind 'wavscat'. It computes wavelet scattering and joint time-frequency scattering with the same Rust core used from Python and in the browser, so features are bit-for-bit identical across languages and platforms. 'wavscat' uses this package automatically when it is installed and falls back to its own pure R engine otherwise.
 }
 \seealso{
 Useful links:

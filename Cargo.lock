@@ -341,14 +341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tapvid"
-version = "0.1.0-dev"
-dependencies = [
- "serde",
- "wavscat-core",
-]
-
-[[package]]
 name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -419,7 +411,6 @@ dependencies = [
  "numpy",
  "pyo3",
  "pythonize",
- "tapvid",
  "wavscat-core",
 ]
 
@@ -430,7 +421,6 @@ dependencies = [
  "js-sys",
  "serde",
  "serde-wasm-bindgen",
- "tapvid",
  "wasm-bindgen",
  "wavscat-core",
 ]

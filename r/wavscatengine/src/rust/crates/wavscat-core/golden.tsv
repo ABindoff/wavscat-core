@@ -1,9 +1,9 @@
 # wavscat-core golden hashes, numerics 0.1.0-dev
-tapping-1800-J8-Tsec1	coefs	3b8854d00417ddea
-tapping-1800-J8-Tsec1	Mean	089c7935baa8205b
-tapping-1800-J8-Tsec1	Sd	33cdde5224cf872b
-tapping-1800-J8-Tsec1	Median	84726c0c69ba66fe
-tapping-1800-J8-Tsec1	Max	752972ed2c0dd7e7
+kinematic-1800-J8-Tsec1	coefs	3b8854d00417ddea
+kinematic-1800-J8-Tsec1	Mean	089c7935baa8205b
+kinematic-1800-J8-Tsec1	Sd	33cdde5224cf872b
+kinematic-1800-J8-Tsec1	Median	84726c0c69ba66fe
+kinematic-1800-J8-Tsec1	Max	752972ed2c0dd7e7
 audio-32000-J9-Q8	coefs	4b410e91fef42746
 audio-32000-J9-Q8	Mean	97168ad93030ed48
 audio-32000-J9-Q8	Sd	37de539975d3ce19

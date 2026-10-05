@@ -1,6 +1,6 @@
 [package]
 name = "wavscat-py"
-description = "Python bindings for wavscat-core and tapvid: bit-identical scattering and tapping features"
+description = "Python bindings for wavscat-core: bit-identical scattering features"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,7 +15,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wavscat-core = { path = "../wavscat-core" }
-tapvid = { path = "../tapvid", features = ["serde"] }
 pyo3 = { version = "0.29", features = ["extension-module"] }
 numpy = "0.29"
 pythonize = "0.29"

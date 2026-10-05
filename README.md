@@ -67,15 +67,11 @@ The R package [wavscat](https://github.com/ABindoff/wavscat) computes
 everything in base R and needs no compiler. The optional companion package
 `r/wavscatengine` adds this engine: with it installed, wavscat computes the
 coefficients in Rust, bit-for-bit identically to Python and the browser
-(`options(wavscat.engine = "auto")`, the default; `"r"` opts out). It also
-runs the webcam tapping pipeline from R:
+(`options(wavscat.engine = "auto")`, the default; `"r"` opts out):
 
 ```r
 remotes::install_github("ABindoff/wavscat-core", subdir = "r/wavscatengine")
 wavscatengine::engine_verify()   # character(0): this machine has the reference bits
-session <- wavscatengine::tapping_session()
-wavscatengine::tapping_push(session, frame, width, height, timestamp_us)
-report <- wavscatengine::tapping_finish(session)
 ```
 
 It needs Rust (`cargo`) and, on Windows, Rtools and the GNU target
@@ -96,69 +92,7 @@ import numpy as np, wavscat
 assert wavscat.verify() == []          # this machine computes the reference bits
 op = wavscat.ScatteringJtfs(n=900, J=7, J_fr=3, Q=(8, 1), T_sec=6, sr=30)
 coefs, s1 = op.transform_with_s1(x)    # x: float64 array of length 900
-session = wavscat.TappingSession()     # push_frame(luma_uint8_2d, timestamp_us)
 ```
-
-The same synthetic trial analysed in Python (native) and in JavaScript (wasm,
-SIMD) gives every feature value and inter-tap interval bit for bit equal.
-
-### Webcam finger tapping
-
-`TappingSession` runs the whole video pipeline (`crates/tapvid`) on the
-participant's device. It keeps only a 64 x 48 grid of each frame:
-
-```js
-import init, { TappingSession, wasmMemory, verify } from "./wavscat_wasm.js";
-await init();
-const session = new TappingSession();
-
-// Each frame, with its capture time in microseconds. Either pass the luma
-// plane, or write it straight into wasm memory with no intermediate copy:
-const ptr = session.stagingPointer(byteLength);
-await videoFrame.copyTo(new Uint8Array(wasmMemory().buffer, ptr, byteLength), { rect, layout });
-session.pushStaged(stride, width, height, timestampUs, /* rgba */ false);
-
-// At the end of the trial:
-const report = session.finish();
-// { accepted, reasons, qc, features: { names, values, params_hash, ... }, itis }
-```
-
-The staging buffer is zeroed after every push, so no raw frame stays even in
-wasm memory. On a laptop under V8, pushing a 320 x 240 frame takes 0.06 ms
-and `finish()` on a 30 s trial about 100 ms; peak wasm memory for 30 s of
-HD frames is under 27 MB. The build uses WebAssembly SIMD, which changes no
-output bit; set `WAVSCAT_WASM_SIMD=0` when running `tools/build-wasm.sh` to
-support browsers from before 2023.
-
-### Checking the video against hand landmarks
-
-`apps/tap-compare` is a page for validating the landmark-free pipeline on a
-real hand. It records three 10 s trials (left hand, right hand, and both hands
-tapping in anti-phase), then sends the same frames, with the camera's capture
-times, both to a `TappingSession` and to MediaPipe Hands. Recording first
-keeps MediaPipe from costing the camera frames, and the capture times (from
-`MediaStreamTrackProcessor`) avoid the display-refresh jitter of
-video-element callbacks. Unlike the streaming session, this keeps about
-140 MB of raw frames in memory until the trial is analysed, so it is for
-validation only. Each hand's thumb–index aperture then goes through
-`analyseTrace`, which applies the same drift removal, resampling, cycle timing
-and features as the video's selected component. The page compares the two:
-the fundamental, waveform correlation, tap timing, inter-tap intervals and
-the JTFS features, with the component's spatial loading drawn under the
-landmark positions. `TappingSession.diagnose()` supplies the ungated analysis
-behind each verdict.
-
-    sh tools/build-wasm.sh
-    node apps/tap-compare/serve.mjs     # then open http://localhost:8000/apps/tap-compare/
-
-The page loads MediaPipe from jsDelivr and its hand model from Google; no
-frame leaves the browser. The JSON download holds the reports, the traces and
-the landmark coordinates, but no images. Each trial's raw video can also be
-saved, as a `.tapraw` file holding the frames exactly as the camera gave them
-with their capture times (about 100 MB for 10 s at 640 x 480). The page
-replays a saved video through the current pipeline and MediaPipe, and
-`node tools/replay-tapraw.mjs trial.tapraw` replays it through the pipeline
-alone and prints its QC, camera clock, rhythm, motion box and features.
 
 To refresh the fixtures from the R package, run
 `Rscript tools/export-fixtures.R ../wavscat/tests/testthat/fixtures fixtures`.
@@ -180,23 +114,6 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
 - [x] JTFS renormalisation: each second-order path divided by S1 of the bands
       it spans, through the same frequential low-pass
-- [x] Video tapping pipeline (`crates/tapvid`), every stage of the brief:
-  - 1, streaming ingest into a box-averaged 64 x 48 ring buffer; no raw frame
-    is retained and no frame allocates
-  - 2, exposure gain, centring and B-spline drift removal on true
-    timestamps, applied on the fly (no copy of the frames)
-  - 3, randomized SVD: seeded, sign-fixed, f32 frames with f64 accumulation
-  - 4, resampling to a uniform grid on true timestamps
-  - 5, component selection and f0, with phase locking across components to
-    recognise harmonics of the hand and of slow motion such as a sway
-  - 6, sub-frame inter-tap intervals from the analytic signal
-  - 7, the feature vector: interval and amplitude features plus JTFS of the
-    unit-RMS component, stamped with versions and a hash of every parameter
-  - 8, QC gating: a report for every trial, with rejection reasons for
-    capture, lighting, interruption, weak or competing rhythm and diffuse
-    motion, every threshold a parameter
-  - `analyse_trial` and `run_trial` end to end, synthetic signals and videos
-    with known ground truth, and the wasm `TappingSession`
 - [x] Python binding through PyO3 (`crates/wavscat-py`), tested in CI on Linux
       (x86-64 and ARM64), macOS and Windows
 - [x] R: the optional `wavscatengine` package (plain C and `.Call`, no

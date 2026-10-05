@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 dest=r/wavscatengine/src/rust/crates
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 rm -rf "$dest"
-for c in wavscat-core tapvid; do
+for c in wavscat-core; do
     mkdir -p "$dest/$c"
     cp -r "crates/$c/src" "$dest/$c/"
     if [ -f "crates/$c/golden.tsv" ]; then cp "crates/$c/golden.tsv" "$dest/$c/"; fi

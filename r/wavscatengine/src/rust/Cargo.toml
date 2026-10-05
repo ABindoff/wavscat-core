@@ -1,6 +1,6 @@
 [package]
 name = "wavscatengine"
-description = "C interface to wavscat-core and tapvid for the R package wavscatengine"
+description = "C interface to wavscat-core for the R package wavscatengine"
 version = "0.1.0"
 edition = "2021"
 license = "BSD-3-Clause"
@@ -15,7 +15,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 wavscat-core = { path = "crates/wavscat-core" }
-tapvid = { path = "crates/tapvid" }
 
 [profile.release]
 opt-level = 3

@@ -1,4 +1,4 @@
-//! Padding and timing for the video tapping configuration: 30 s at 30 Hz.
+//! Padding and timing for a 30 Hz movement configuration: 30 s at 30 Hz.
 use std::time::Instant;
 use wavscat_core::jtfs::{ParamsJtfs, ScatteringJtfs};
 use wavscat_core::scattering1d::TSpec;
