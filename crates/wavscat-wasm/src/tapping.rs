@@ -20,11 +20,11 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-use tapvid::features::{trial_features, FeatureParams};
+use tapvid::features::FeatureParams;
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::pipeline::PipelineParams;
-use tapvid::qc::{run_trial, QcParams};
-use tapvid::select::F0Case;
+use tapvid::qc::QcParams;
+use tapvid::report::trial_report;
 use tapvid::synth::{frame_times, FrameClock, TapSpec};
 use tapvid::synth_video::{Distractor, VideoSpec, VideoSynth};
 
@@ -58,47 +58,6 @@ pub struct TappingSession {
     pipeline: PipelineParams,
     qc: QcParams,
     features: FeatureParams,
-}
-
-#[derive(Serialize)]
-struct QcJson {
-    frames_accepted: u64,
-    frames_rejected: u64,
-    frames_dropped: u64,
-    effective_fps: f64,
-    longest_gap: f64,
-    dropped_fraction: f64,
-    gain_min: Option<f64>,
-    gain_max: Option<f64>,
-    abrupt_changes: Option<usize>,
-    dark_frames: Option<usize>,
-    score: Option<f64>,
-    competitor_ratio: Option<f64>,
-    from_harmonic: Option<bool>,
-    f0_hz: Option<f64>,
-    usable_cycles: Option<usize>,
-    loading_spread: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct FeaturesJson {
-    schema_version: u32,
-    crate_version: String,
-    numerics_version: String,
-    params_hash: String,
-    names: Vec<String>,
-    values: Vec<f64>,
-}
-
-#[derive(Serialize)]
-struct ReportJson {
-    accepted: bool,
-    reasons: Vec<String>,
-    qc: QcJson,
-    /// Present only for an accepted trial.
-    features: Option<FeaturesJson>,
-    /// Inter-tap intervals in seconds, for an accepted trial.
-    itis: Option<Vec<f64>>,
 }
 
 #[wasm_bindgen]
@@ -173,44 +132,7 @@ impl TappingSession {
     /// Analyse and gate the trial: `{ accepted, reasons, qc, features, itis }`.
     /// Features and intervals are present only when the trial is accepted.
     pub fn finish(&self) -> Result<JsValue, JsError> {
-        let out = run_trial(&self.ingest, &self.pipeline, &self.qc);
-        let q = &out.qc;
-        let mut report = ReportJson {
-            accepted: q.accepted(),
-            reasons: q.reasons.iter().map(|r| r.to_string()).collect(),
-            qc: QcJson {
-                frames_accepted: q.ingest.frames_accepted,
-                frames_rejected: q.ingest.frames_rejected,
-                frames_dropped: q.ingest.frames_dropped,
-                effective_fps: q.ingest.effective_fps,
-                longest_gap: q.ingest.longest_gap,
-                dropped_fraction: q.dropped_fraction,
-                gain_min: q.gain_min,
-                gain_max: q.gain_max,
-                abrupt_changes: q.abrupt_changes,
-                dark_frames: q.dark_frames,
-                score: q.score,
-                competitor_ratio: q.competitor_ratio,
-                from_harmonic: q.case.map(|c| c == F0Case::Harmonic),
-                f0_hz: q.f0_hz,
-                usable_cycles: q.usable_cycles,
-                loading_spread: q.loading_spread,
-            },
-            features: None,
-            itis: None,
-        };
-        if let Some(r) = out.accepted() {
-            let f = trial_features(r, &self.pipeline, &self.qc, &self.features).map_err(js_err)?;
-            report.features = Some(FeaturesJson {
-                schema_version: f.schema_version,
-                crate_version: f.crate_version.to_string(),
-                numerics_version: f.numerics_version.to_string(),
-                params_hash: f.params_hash,
-                names: f.names,
-                values: f.values,
-            });
-            report.itis = Some(r.cycles.itis.clone());
-        }
+        let report = trial_report(&self.ingest, &self.pipeline, &self.qc, &self.features).map_err(js_err)?;
         let ser = serde_wasm_bindgen::Serializer::new().serialize_missing_as_null(true);
         report.serialize(&ser).map_err(js_err)
     }

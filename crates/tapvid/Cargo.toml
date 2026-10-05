@@ -11,3 +11,8 @@ publish = false
 
 [dependencies]
 wavscat-core = { path = "../wavscat-core" }
+serde = { version = "1", features = ["derive"], optional = true }
+
+[features]
+# Serialisable trial reports, for the bindings.
+serde = ["dep:serde"]

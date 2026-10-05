@@ -3,3 +3,6 @@ Cargo.lock.bak
 /crates/wavscat-wasm/pkg-node
 /crates/wavscat-wasm/pkg-web
 node_modules/
+/.venv
+/dist
+__pycache__/

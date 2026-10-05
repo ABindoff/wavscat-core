@@ -61,6 +61,23 @@ S.path(5);                        // one path's coefficients
 Parameter names are the R argument names, so one parameter set means the same
 thing in every language. Unknown names are rejected.
 
+## Python
+
+`crates/wavscat-py` builds a `wavscat` module with maturin
+(`maturin develop --release` from that directory). It has the same classes
+and the same R argument names as keyword arguments:
+
+```python
+import numpy as np, wavscat
+assert wavscat.verify() == []          # this machine computes the reference bits
+op = wavscat.ScatteringJtfs(n=900, J=7, J_fr=3, Q=(8, 1), T_sec=6, sr=30)
+coefs, s1 = op.transform_with_s1(x)    # x: float64 array of length 900
+session = wavscat.TappingSession()     # push_frame(luma_uint8_2d, timestamp_us)
+```
+
+The same synthetic trial analysed in Python (native) and in JavaScript (wasm,
+SIMD) gives every feature value and inter-tap interval bit for bit equal.
+
 ### Webcam finger tapping
 
 `TappingSession` runs the whole video pipeline (`crates/tapvid`) on the
@@ -126,7 +143,9 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
     motion, every threshold a parameter
   - `analyse_trial` and `run_trial` end to end, synthetic signals and videos
     with known ground truth, and the wasm `TappingSession`
-- [ ] R binding through extendr; Python binding through PyO3
+- [x] Python binding through PyO3 (`crates/wavscat-py`), tested in CI on Linux
+      (x86-64 and ARM64), macOS and Windows
+- [ ] R binding through extendr, replacing the pure-R engine in `wavscat`
 
 ## Licence
 

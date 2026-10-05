@@ -34,6 +34,7 @@ pub mod phase;
 pub mod pipeline;
 pub mod preprocess;
 pub mod qc;
+pub mod report;
 pub mod resample;
 pub mod rng;
 pub mod select;

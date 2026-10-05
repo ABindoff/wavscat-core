@@ -14,7 +14,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wavscat-core = { path = "../wavscat-core" }
-tapvid = { path = "../tapvid" }
+tapvid = { path = "../tapvid", features = ["serde"] }
 # Pinned to the exact version of the wasm-bindgen CLI used to generate the
 # JavaScript glue; the two must match.
 wasm-bindgen = "=0.2.129"

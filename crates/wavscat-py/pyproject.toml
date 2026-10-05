@@ -1,0 +1,16 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "wavscat"
+description = "Wavelet scattering and webcam finger-tapping features, bit-identical to R and the browser"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24"]
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Aidan D. Bindoff", email = "aidan.bindoff@utas.edu.au" }]
+dynamic = ["version"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "wavscat"
