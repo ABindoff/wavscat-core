@@ -14,6 +14,8 @@
 //! Stages, as numbered in the design brief:
 //!
 //! - 4: [`resample`], irregular capture times to a uniform grid
+//! - 5: [`select`], the tapping component and its fundamental, from a
+//!   [`spectrum`]
 //! - 6: [`phase`], inter-tap intervals and amplitude from the analytic signal
 //!
 //! [`synth`] generates recordings with known ground truth for testing.
@@ -22,4 +24,6 @@
 pub mod phase;
 pub mod resample;
 pub mod rng;
+pub mod select;
+pub mod spectrum;
 pub mod synth;

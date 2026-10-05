@@ -25,7 +25,11 @@ pub struct TapSpec {
     pub amplitude: f64,
     /// Change in amplitude per second: negative for a decrement.
     pub amplitude_slope: f64,
-    /// Amplitude of a second harmonic, relative to the fundamental. Real
+    /// Amplitude of the fundamental. Set it below `second_harmonic` to mimic
+    /// a camera angle at which opening and closing look alike, which moves
+    /// the dominant energy to twice the tapping rate.
+    pub fundamental: f64,
+    /// Amplitude of a second harmonic. Real
     /// tapping is not sinusoidal: opening and closing differ in speed.
     pub second_harmonic: f64,
     /// Standard deviation of additive white noise on each frame.
@@ -42,6 +46,7 @@ impl Default for TapSpec {
             iti_sd: 0.0,
             amplitude: 1.0,
             amplitude_slope: 0.0,
+            fundamental: 1.0,
             second_harmonic: 0.0,
             noise_sd: 0.0,
             seed: 1,
@@ -158,8 +163,8 @@ pub fn frame_times(clock: &FrameClock, duration: f64) -> Vec<f64> {
     out
 }
 
-/// Render a recording, `A(t) (cos(phase) + h cos(2 phase + 1)) + noise` at
-/// each capture time, with `h` the second harmonic and
+/// Render a recording, `A(t) (g cos(phase) + h cos(2 phase + 1)) + noise` at
+/// each capture time, with `g` the fundamental, `h` the second harmonic and
 /// `A(t) = amplitude + amplitude_slope * t`.
 pub fn render(spec: &TapSpec, clock: &FrameClock) -> SynthRecording {
     let taps = tap_times(spec);
@@ -170,7 +175,7 @@ pub fn render(spec: &TapSpec, clock: &FrameClock) -> SynthRecording {
         .map(|&t| {
             let a = spec.amplitude + spec.amplitude_slope * t;
             let ph = phase_at(&taps, t);
-            let wave = math::cos(ph) + spec.second_harmonic * math::cos(2.0 * ph + 1.0);
+            let wave = spec.fundamental * math::cos(ph) + spec.second_harmonic * math::cos(2.0 * ph + 1.0);
             a * wave + spec.noise_sd * noise.normal()
         })
         .collect();

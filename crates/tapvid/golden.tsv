@@ -6,3 +6,9 @@ resample	values	e896870e9c775ab7
 phase	boundaries	a3420afc54241a9d
 phase	amplitudes	bcf41859d3f97b05
 phase	summary	6d46aeb5348b1398
+welch-fundamental	power	0c1e177021f650e1
+select-fundamental	periodicity	18f75372390e0412
+phase-fundamental	boundaries	86b90036a0353053
+welch-harmonic	power	68f6e58279892c2d
+select-harmonic	periodicity	e1adc377221f21d7
+phase-harmonic	boundaries	29204b12226f5d83

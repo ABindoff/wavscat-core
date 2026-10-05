@@ -86,44 +86,39 @@ pub struct CycleAnalysis {
 /// Analyse a uniformly sampled oscillation, `x[i]` at time `t0 + i / fs`, with
 /// fundamental frequency `f0` in Hz.
 pub fn analyse(x: &[f64], fs: f64, t0: f64, f0: f64, p: &PhaseParams) -> Result<CycleAnalysis, Error> {
+    analyse_at(x, fs, t0, f0, 1, p)
+}
+
+/// [`analyse`], timing the cycles from harmonic `harmonic` of `f0` instead
+/// of from the fundamental.
+///
+/// When the second harmonic dominates, as stage 5 reports, it is the cleaner
+/// signal: a phase-locked harmonic has phase `2 phi + c`, so one tapping
+/// cycle is one `4 pi` advance of its phase. The band-pass keeps the same
+/// width in Hz, `bandwidth * f0`, because the harmonic's modulation
+/// sidebands sit at the same offsets as the fundamental's. Phase diffusion
+/// is reported on the fundamental's scale.
+pub fn analyse_at(
+    x: &[f64],
+    fs: f64,
+    t0: f64,
+    f0: f64,
+    harmonic: u32,
+    p: &PhaseParams,
+) -> Result<CycleAnalysis, Error> {
     let n = x.len();
+    let h = harmonic as f64;
     if x.iter().any(|v| !v.is_finite()) {
         return Err(Error("The signal contains gaps or non-finite values; split or reject the trial.".into()));
     }
-    if !(fs > 0.0) || !(f0 > 0.0) || f0 >= fs / 2.0 {
-        return Err(Error("Need fs > 0 and 0 < f0 < fs / 2.".into()));
+    if !(fs > 0.0) || !(f0 > 0.0) || harmonic == 0 || h * f0 >= fs / 2.0 {
+        return Err(Error("Need fs > 0, harmonic >= 1 and 0 < harmonic * f0 < fs / 2.".into()));
     }
     if !(p.bandwidth > 0.0) {
         return Err(Error("bandwidth must be positive.".into()));
     }
 
-    // Centre, then pad by reflection so the band-pass sees no wrap-around step.
-    let mean = x.iter().sum::<f64>() / n as f64;
-    let centred: Vec<f64> = x.iter().map(|v| v - mean).collect();
-    let padding = ((p.pad_cycles * fs / f0).ceil() as usize).min(n.saturating_sub(1));
-    let padded = pad::pad_reflect(&centred, padding, padding);
-    let len = padded.len();
-
-    // Gaussian band-pass and analytic signal in one multiplication: twice the
-    // band-pass gain at positive frequencies, once at zero and Nyquist, zero
-    // at negative frequencies.
-    let sigma = p.bandwidth * f0;
-    let gain = |f: f64| math::exp(-((f - f0) * (f - f0)) / (2.0 * sigma * sigma));
-    let mut spec = fft::fft_real(&padded);
-    for (k, v) in spec.iter_mut().enumerate() {
-        let weight = if k == 0 {
-            gain(0.0)
-        } else if 2 * k < len {
-            2.0 * gain(k as f64 * fs / len as f64)
-        } else if 2 * k == len {
-            gain(fs / 2.0)
-        } else {
-            0.0
-        };
-        *v = v.scale(weight);
-    }
-    fft::ifft(&mut spec);
-    let z: Vec<C64> = spec[padding..padding + n].to_vec();
+    let z = analytic_band(x, fs, h * f0, p.bandwidth * f0, p.pad_cycles * h);
 
     // Unwrapped phase and envelope.
     // Unwrap: each step is the change in wrapped angle, reduced to the
@@ -139,12 +134,13 @@ pub fn analyse(x: &[f64], fs: f64, t0: f64, f0: f64, p: &PhaseParams) -> Result<
     let envelope: Vec<f64> = z.iter().map(|v| v.norm()).collect();
     let time = |i: f64| t0 + i / fs;
 
-    // Cycle boundaries: the first crossing of each multiple of 2 pi.
+    // Cycle boundaries: the first crossing of each multiple of 2 pi h.
+    let period = 2.0 * PI * h;
     let mut boundaries = Vec::new();
-    let mut k = (phase[0] / (2.0 * PI)).floor() + 1.0;
+    let mut k = (phase[0] / period).floor() + 1.0;
     let mut i = 1;
     while i < n {
-        let target = 2.0 * PI * k;
+        let target = period * k;
         if phase[i] >= target && phase[i - 1] < target {
             let frac = (target - phase[i - 1]) / (phase[i] - phase[i - 1]);
             boundaries.push(time((i - 1) as f64 + frac));
@@ -180,10 +176,50 @@ pub fn analyse(x: &[f64], fs: f64, t0: f64, f0: f64, p: &PhaseParams) -> Result<
     // Phase diffusion over the span of the kept cycles.
     let a = sample_of(kept[0]).ceil() as usize;
     let b = (sample_of(kept[kept.len() - 1]).floor() as usize).min(n - 1);
-    let diffusion = phase_diffusion(&phase[a..=b], fs, f0, p.diffusion_lags);
+    let diffusion = if harmonic == 1 {
+        phase_diffusion(&phase[a..=b], fs, f0, p.diffusion_lags)
+    } else {
+        let scaled: Vec<f64> = phase[a..=b].iter().map(|v| v / h).collect();
+        phase_diffusion(&scaled, fs, f0, p.diffusion_lags)
+    };
 
     let summary = summarise(&itis, &amplitudes, &mids, diffusion);
     Ok(CycleAnalysis { boundaries, itis, amplitudes, summary })
+}
+
+
+/// The analytic signal of `x` (sampled at `fs` Hz) band-passed around `fc`
+/// Hz with a Gaussian of standard deviation `sigma` Hz.
+///
+/// The mean is removed and the series padded by reflection, `pad_cycles`
+/// cycles of `fc` at each end, so the band-pass sees no wrap-around step. The
+/// band-pass and the analytic signal are one multiplication in frequency:
+/// twice the gain at positive frequencies, once at zero and Nyquist, zero at
+/// negative frequencies.
+pub(crate) fn analytic_band(x: &[f64], fs: f64, fc: f64, sigma: f64, pad_cycles: f64) -> Vec<C64> {
+    let n = x.len();
+    let mean = x.iter().sum::<f64>() / n as f64;
+    let centred: Vec<f64> = x.iter().map(|v| v - mean).collect();
+    let padding = ((pad_cycles * fs / fc).ceil() as usize).min(n.saturating_sub(1));
+    let padded = pad::pad_reflect(&centred, padding, padding);
+    let len = padded.len();
+
+    let gain = |f: f64| math::exp(-((f - fc) * (f - fc)) / (2.0 * sigma * sigma));
+    let mut spec = fft::fft_real(&padded);
+    for (k, v) in spec.iter_mut().enumerate() {
+        let weight = if k == 0 {
+            gain(0.0)
+        } else if 2 * k < len {
+            2.0 * gain(k as f64 * fs / len as f64)
+        } else if 2 * k == len {
+            gain(fs / 2.0)
+        } else {
+            0.0
+        };
+        *v = v.scale(weight);
+    }
+    fft::ifft(&mut spec);
+    spec[padding..padding + n].to_vec()
 }
 
 fn mean(v: &[f64]) -> f64 {

@@ -8,7 +8,9 @@
 
 use std::fmt::Write as _;
 
-use tapvid::phase::{analyse, PhaseParams};
+use tapvid::phase::{analyse, analyse_at, PhaseParams};
+use tapvid::select::{periodicity, BandParams};
+use tapvid::spectrum::{welch, WelchParams};
 use tapvid::resample::resample;
 use tapvid::rng::SplitMix64;
 use tapvid::synth::{render, FrameClock, TapSpec};
@@ -50,6 +52,24 @@ fn report() -> String {
         s.mean_amplitude, s.amplitude_slope, s.relative_amplitude_slope, s.phase_diffusion,
     ];
     writeln!(out, "phase\tsummary\t{:016x}", hash(summary)).unwrap();
+
+    // Stage 5 on a fundamental-dominant and a harmonic-dominant waveform, and
+    // stage 6 timed from whichever stage 5 chooses.
+    for (name, fundamental) in [("fundamental", 1.0), ("harmonic", 0.3)] {
+        let spec = TapSpec { iti_sd: 0.012, fundamental, second_harmonic: 1.0, noise_sd: 0.05, seed: 23, ..TapSpec::default() };
+        let rec = render(&spec, &clock);
+        let u = resample(&rec.timestamps, &rec.values, 30.0, 0.15).unwrap();
+        let psd = welch(&u.values, 30.0, &WelchParams::default()).unwrap();
+        writeln!(out, "welch-{name}\tpower\t{:016x}", hash(psd.power.iter().copied())).unwrap();
+        let p = periodicity(&u.values, 30.0, &WelchParams::default(), &BandParams::default()).unwrap();
+        let fields = [
+            p.band_fraction, p.sharpness, p.score, p.peak_hz, p.f0_hz,
+            p.timing_harmonic() as f64, p.half_ratio, p.half_locking,
+        ];
+        writeln!(out, "select-{name}\tperiodicity\t{:016x}", hash(fields)).unwrap();
+        let a = analyse_at(&u.values, u.fs, u.t0, p.f0_hz, p.timing_harmonic(), &PhaseParams::default()).unwrap();
+        writeln!(out, "phase-{name}\tboundaries\t{:016x}", hash(a.boundaries.iter().copied())).unwrap();
+    }
     out
 }
 
