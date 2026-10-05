@@ -62,6 +62,11 @@ const state = {
   pending: 0,
   skipped: 0,
   previewSeen: 0,
+  // Options, read from the page when a trial starts.
+  tracking: true, // send frames to MediaPipe at all
+  mpScale: 0.5, // MediaPipe input size, as a fraction of the camera frame
+  mpCanvas: null,
+  mpCtx: null,
   detectMs: [],
   firstUs: null,
   lastUs: null,
@@ -115,11 +120,18 @@ async function startCamera() {
   state.camera = { width: video.videoWidth, height: video.videoHeight, frameRate: s.frameRate ?? null, label: stream.getVideoTracks()[0].label };
   state.canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
   state.ctx = state.canvas.getContext("2d", { willReadFrequently: true });
+  sizeMediapipeCanvas();
   const overlay = $("overlay");
   overlay.width = video.videoWidth;
   overlay.height = video.videoHeight;
   state.phase = "preview";
-  status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Warming up hand tracking…`);
+  readOptions();
+  if (state.tracking) {
+    status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Warming up hand tracking…`);
+  } else {
+    $("record").disabled = false;
+    status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Hand tracking is off. Ready to record.`);
+  }
   scheduleFrame();
 }
 
@@ -147,10 +159,23 @@ function scheduleFrame() {
   }
 }
 
-/// Send the frame now in the canvas to the landmark worker. The bitmap is
-/// transferred, not copied, and the canvas is left blank.
+/// The canvas MediaPipe's frames are drawn into, at `mpScale` of the camera
+/// frame. Landmarks are in 0-1 image coordinates, so the scale changes their
+/// precision but not their meaning.
+function sizeMediapipeCanvas() {
+  const w = Math.max(1, Math.round(state.camera.width * state.mpScale));
+  const h = Math.max(1, Math.round(state.camera.height * state.mpScale));
+  if (state.mpCanvas?.width === w && state.mpCanvas?.height === h) return;
+  state.mpCanvas = new OffscreenCanvas(w, h);
+  state.mpCtx = state.mpCanvas.getContext("2d");
+}
+
+/// Draw the current video frame, at MediaPipe's size, and send it to the
+/// landmark worker. The bitmap is transferred, not copied.
 function sendToWorker(id, tMs) {
-  const bitmap = state.canvas.transferToImageBitmap();
+  const video = $("video");
+  state.mpCtx.drawImage(video, 0, 0, state.mpCanvas.width, state.mpCanvas.height);
+  const bitmap = state.mpCanvas.transferToImageBitmap();
   state.pending += 1;
   state.worker.postMessage({ type: "frame", id, tMs, bitmap }, [bitmap]);
 }
@@ -164,8 +189,7 @@ function onFrame(tMs) {
   if (state.phase !== "recording") {
     // Preview and countdown: landmarks only, for the overlay, and only when
     // the worker is idle so that no backlog builds before recording.
-    if (state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
-      state.ctx.drawImage(video, 0, 0, width, height);
+    if (state.tracking && state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
       sendToWorker(-1, tMs);
     }
     if (state.phase === "countdown") {
@@ -190,7 +214,9 @@ function onFrame(tMs) {
   state.lastUs = us;
   const frame = { us, id: state.nextId++, hands: null };
   state.frames.push(frame);
-  if (state.pending < MAX_PENDING) {
+  if (!state.tracking) {
+    // Video only: no frame goes to MediaPipe.
+  } else if (state.pending < MAX_PENDING) {
     state.byId.set(frame.id, frame);
     sendToWorker(frame.id, tMs);
   } else {
@@ -215,7 +241,7 @@ function onLandmarks(data) {
     // Record becomes available once hand tracking has run steadily on the
     // preview for a while: its first frames can stall the camera.
     state.previewSeen += 1;
-    if (state.previewSeen === WARMUP_FRAMES && state.phase === "preview") {
+    if (state.previewSeen === WARMUP_FRAMES && state.phase === "preview" && $("record").disabled) {
       $("record").disabled = false;
       status(`${$("status").textContent.replace(" Warming up hand tracking…", "")} Ready to record.`);
     }
@@ -270,7 +296,22 @@ function drawHands(res) {
   }
 }
 
+function readOptions() {
+  state.tracking = $("tracking").checked;
+  state.mpScale = Number($("mpScale").value);
+  if (state.camera) sizeMediapipeCanvas();
+  $("mpScale").disabled = !state.tracking;
+  if (!state.tracking) $("overlay").getContext("2d").clearRect(0, 0, $("overlay").width, $("overlay").height);
+}
+
+function lockOptions(locked) {
+  $("tracking").disabled = locked;
+  $("mpScale").disabled = locked || !$("tracking").checked;
+}
+
 function startRecording() {
+  readOptions();
+  lockOptions(true);
   state.session?.free();
   state.session = new TappingSession();
   state.frames = [];
@@ -453,8 +494,13 @@ function featureAgreement(fv, ft) {
 
 // ---------------------------------------------------------------- analysis
 
+function resultKey(trial, tracking) {
+  return tracking ? trial.id : `${trial.id}-video`;
+}
+
 function analyse() {
   const trial = TRIALS[state.trialIndex];
+  const key = resultKey(trial, state.tracking);
   const t = performance.now();
   const diag = state.session.diagnose();
   const ms = performance.now() - t;
@@ -464,7 +510,9 @@ function analyse() {
   for (const side of ["left", "right"]) {
     const s = slots[side];
     const entry = { detected: s.length / n };
-    if (s.length >= 0.5 * n) {
+    if (!state.tracking) {
+      entry.error = "hand tracking was off";
+    } else if (s.length >= 0.5 * n) {
       const tr = traceOf(s, state.firstUs);
       try {
         entry.analysis = analyseTrace(tr.times, tr.values);
@@ -478,7 +526,9 @@ function analyse() {
   if (trial.hands.includes("left − right")) {
     const d = differenceTrace(slots, state.firstUs);
     const entry = { detected: d ? d.times.length / n : 0 };
-    if (d && d.times.length >= 0.5 * n) {
+    if (!state.tracking) {
+      entry.error = "hand tracking was off";
+    } else if (d && d.times.length >= 0.5 * n) {
       try {
         entry.analysis = analyseTrace(d.times, d.values);
       } catch (e) {
@@ -500,8 +550,10 @@ function analyse() {
     };
   }
 
-  state.results[trial.id] = {
+  state.results[key] = {
     trial: trial.id,
+    hand_tracking: state.tracking,
+    mediapipe_input: state.tracking ? { width: state.mpCanvas.width, height: state.mpCanvas.height } : null,
     recorded: new Date().toISOString(),
     camera: state.camera,
     frames: n,
@@ -517,14 +569,18 @@ function analyse() {
   };
   state.session.reset();
   state.phase = "preview";
-  renderResult(trial);
+  renderResult(trial, key);
   renderSummary();
   renderChips();
   $("record").disabled = false;
   $("next").disabled = state.trialIndex >= TRIALS.length - 1;
   $("download").disabled = false;
+  lockOptions(false);
   const missing = state.frames.filter((f) => !f.hands).length;
-  status(`Done: ${n} frames (${fmt(diag.report.qc.effective_fps, 1)} fps, ${fmt(100 * diag.report.qc.dropped_fraction, 0)}% dropped); landmarks for ${n - missing}, median ${fmt(median(state.detectMs), 0)} ms each on ${state.delegate}. Analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
+  const marks = state.tracking
+    ? `landmarks for ${n - missing}, median ${fmt(median(state.detectMs), 0)} ms each on ${state.delegate} at ${state.mpCanvas.width} x ${state.mpCanvas.height}`
+    : "hand tracking off";
+  status(`Done: ${n} frames (${fmt(diag.report.qc.effective_fps, 1)} fps, ${fmt(100 * diag.report.qc.dropped_fraction, 0)}% dropped); ${marks}. Analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
 }
 
 /// Mean image position (0–1) of the wrist, thumb tip and index tip.
@@ -539,7 +595,7 @@ const fmt = (x, d = 3) => (x === null || x === undefined || Number.isNaN(x) ? "�
 
 function renderChips() {
   $("chips").innerHTML = TRIALS.map((t, i) =>
-    `<span class="chip ${i === state.trialIndex ? "current" : ""} ${state.results[t.id] ? "done" : ""}">${i + 1}. ${t.title}</span>`).join("");
+    `<span class="chip ${i === state.trialIndex ? "current" : ""} ${state.results[t.id] || state.results[`${t.id}-video`] ? "done" : ""}">${i + 1}. ${t.title}</span>`).join("");
 }
 
 function showTrial() {
@@ -553,15 +609,15 @@ function status(s) {
   $("status").textContent = s;
 }
 
-function renderResult(trial) {
-  const res = state.results[trial.id];
+function renderResult(trial, key) {
+  const res = state.results[key];
   const diag = res.video;
   const a = diag.analysis;
-  let el = document.getElementById(`result-${trial.id}`);
+  let el = document.getElementById(`result-${key}`);
   if (!el) {
     el = document.createElement("section");
     el.className = "panel";
-    el.id = `result-${trial.id}`;
+    el.id = `result-${key}`;
     $("results").appendChild(el);
   }
   const rep = diag.report;
@@ -582,7 +638,7 @@ function renderResult(trial) {
   }).join("");
 
   el.innerHTML = `
-    <h2>${trial.title}</h2>
+    <h2>${trial.title}${res.hand_tracking ? "" : " (video only)"}</h2>
     <p>Video pipeline: ${verdict}. ${a ? `f<sub>0</sub> = ${fmt(a.f0_hz, 2)} Hz${a.from_harmonic ? " (timed from its second harmonic)" : ""}, component ${a.component + 1} of ${a.ranking.length}, ${a.itis.length} intervals, loading spread ${fmt(a.loading_spread, 3)}, competitor ratio ${fmt(a.competitor_ratio, 2)}.` : ""}
       ${res.frames} frames (${fmt(diag.report.qc.effective_fps, 1)} fps effective).</p>
     <h3>Agreement with each hand's landmark trace</h3>
@@ -593,23 +649,23 @@ function renderResult(trial) {
     </table></div>
     <p class="note">The trace is thumb–index aperture over hand size. Waveform r is the correlation of the video component with the trace, at the best lag within ±300 ms; the component's sign is arbitrary. Taps are cycle boundaries from each analytic signal, aligned by the waveform lag and sign, then matched within half a cycle; their phase origins differ, so a constant offset is expected and the timing SD (the spread of the offset) is what matters. ITI |diff| is the mean absolute difference between matched inter-tap intervals.</p>
     <div class="grid2">
-      <div><h3>Video loading, and mean landmark positions</h3><canvas class="heat" id="heat-${trial.id}"></canvas>
+      <div><h3>Video loading, and mean landmark positions</h3><canvas class="heat" id="heat-${key}"></canvas>
         <div class="legend"><span>red/blue: the selected component's loading, by sign</span><span>● index tip</span><span>▲ thumb tip</span><span>■ wrist</span></div></div>
-      <div><h3>Signals (standardised)</h3><canvas class="plot" id="sig-${trial.id}"></canvas>
+      <div><h3>Signals (standardised)</h3><canvas class="plot" id="sig-${key}"></canvas>
         <div class="legend">${legend(["video", ...names.filter((n) => res.landmarks[n].analysis)])}<span>ticks: tap boundaries</span></div>
-        <h3>Inter-tap intervals (s)</h3><canvas class="plot" id="iti-${trial.id}"></canvas></div>
+        <h3>Inter-tap intervals (s)</h3><canvas class="plot" id="iti-${key}"></canvas></div>
     </div>
     <h3>Features</h3>
     <div class="grid2">
       <div class="scroll">${itiTable(res, names)}</div>
-      <div><canvas class="plot" id="feat-${trial.id}" style="height:260px"></canvas>
+      <div><canvas class="plot" id="feat-${key}" style="height:260px"></canvas>
         <p class="note">JTFS features, landmark (y) against video (x), one point per path; the line is equality.</p></div>
     </div>`;
   if (a) {
-    drawHeat($(`heat-${trial.id}`), a, res.landmarks);
-    drawSignals($(`sig-${trial.id}`), a, res);
-    drawItis($(`iti-${trial.id}`), a, res);
-    drawFeatures($(`feat-${trial.id}`), a, res);
+    drawHeat($(`heat-${key}`), a, res.landmarks);
+    drawSignals($(`sig-${key}`), a, res);
+    drawItis($(`iti-${key}`), a, res);
+    drawFeatures($(`feat-${key}`), a, res);
   }
 }
 
@@ -783,21 +839,29 @@ function drawFeatures(c, a, res) {
 
 function renderSummary() {
   const rows = [];
-  for (const t of TRIALS) {
-    const r = state.results[t.id];
-    if (!r) continue;
+  for (const r of Object.values(state.results)) {
+    const t = TRIALS.find((x) => x.id === r.trial);
+    const title = `${t.title}${r.hand_tracking ? "" : " (video only)"}`;
+    const q = r.video.report.qc;
     const a = r.video.analysis;
+    const lead = `<td>${title}</td><td>${fmt(q.effective_fps, 1)}</td><td>${fmt(100 * q.dropped_fraction, 1)}</td>
+      <td>${r.video.report.accepted ? "yes" : "no"}</td><td>${fmt(a?.f0_hz, 2)}</td><td>${fmt(a?.features?.values[3], 4)}</td>`;
+    if (!r.hand_tracking) {
+      rows.push(`<tr>${lead}<td>–</td><td colspan="6" style="text-align:left">hand tracking off</td></tr>`);
+      continue;
+    }
     for (const [name, tr] of Object.entries(r.landmarks)) {
       const c = r.comparisons[name];
-      rows.push(`<tr><td>${t.title}</td><td>${r.video.report.accepted ? "yes" : "no"}</td><td>${fmt(a?.f0_hz, 2)}</td><td>${name}</td>
+      rows.push(`<tr>${lead}<td>${name}</td>
         <td>${fmt(tr.analysis?.f0_hz, 2)}</td><td>${c ? fmt(c.waveform.r, 2) : "–"}</td><td>${c ? fmt(c.timing.offsetSdMs, 1) : "–"}</td>
         <td>${c ? fmt(c.timing.itiMadMs, 1) : "–"}</td><td>${c?.features ? fmt(c.features.r, 3) : "–"}</td>
-        <td>${fmt(a?.features?.values[3], 4)}</td><td>${fmt(tr.analysis?.features.values[3], 4)}</td></tr>`);
+        <td>${fmt(tr.analysis?.features.values[3], 4)}</td></tr>`);
     }
   }
   $("summaryPanel").hidden = rows.length === 0;
-  $("summary").innerHTML = `<tr><th>trial</th><th>QC</th><th>video f<sub>0</sub> (Hz)</th><th>landmark trace</th><th>trace f<sub>0</sub> (Hz)</th>
-    <th>waveform r</th><th>timing SD (ms)</th><th>ITI |diff| (ms)</th><th>JTFS feature r</th><th>video ITI CV</th><th>trace ITI CV</th></tr>${rows.join("")}`;
+  $("summary").innerHTML = `<tr><th>trial</th><th>fps</th><th>dropped (%)</th><th>QC</th><th>video f<sub>0</sub> (Hz)</th><th>video ITI CV</th>
+    <th>landmark trace</th><th>trace f<sub>0</sub> (Hz)</th><th>waveform r</th><th>timing SD (ms)</th><th>ITI |diff| (ms)</th>
+    <th>JTFS feature r</th><th>trace ITI CV</th></tr>${rows.join("")}`;
 }
 
 function download() {
@@ -822,4 +886,9 @@ $("next").onclick = () => {
   showTrial();
 };
 $("download").onclick = download;
+$("tracking").onchange = () => {
+  readOptions();
+  if (state.phase === "preview" && $("record").disabled && !state.tracking) $("record").disabled = false;
+};
+$("mpScale").onchange = readOptions;
 setup().catch((e) => status(`Setup failed: ${e.message}`));

@@ -38,6 +38,8 @@
   .chip { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); }
   .chip.current { border-color: var(--ink); color: var(--ink); }
   .chip.done { color: var(--ok); border-color: var(--ok); }
+  .options { margin-top: 10px; font-size: 0.9rem; color: var(--muted); gap: 16px; }
+  .options select { font: inherit; margin-left: 4px; }
   .status { color: var(--muted); font-size: 0.9rem; min-height: 1.3em; margin-top: 8px; }
   table { border-collapse: collapse; width: 100%; font-size: 0.86rem; font-variant-numeric: tabular-nums; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -80,8 +82,17 @@
           <button id="next" disabled>Next trial</button>
           <button id="download" disabled>Download results (JSON)</button>
         </div>
+        <div class="row options">
+          <label><input type="checkbox" id="tracking" checked> Hand tracking</label>
+          <label>MediaPipe input
+            <select id="mpScale">
+              <option value="0.5" selected>half size</option>
+              <option value="1">full size</option>
+            </select>
+          </label>
+        </div>
         <div class="status" id="status"></div>
-        <p class="note">Sit so both hands fit in the frame, palms towards the camera, about an arm's length away, in even light. Hands are named as the person's own: their left hand appears on the right of the camera image, which this preview shows mirrored.</p>
+        <p class="note">Sit so both hands fit in the frame, palms towards the camera, about an arm's length away, in even light. Turn hand tracking off to record the video pipeline alone, for instance to see whether MediaPipe costs the camera frames; a video-only recording is kept alongside the one with landmarks. Hands are named as the person's own: their left hand appears on the right of the camera image, which this preview shows mirrored.</p>
       </div>
     </div>
   </section>
