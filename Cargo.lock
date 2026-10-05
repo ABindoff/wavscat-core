@@ -150,6 +150,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tapvid"
+version = "0.1.0-dev"
+dependencies = [
+ "wavscat-core",
+]
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"

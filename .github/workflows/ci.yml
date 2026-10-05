@@ -26,11 +26,11 @@ jobs:
         with:
           components: clippy
       - name: Tests, optimised
-        run: cargo test --release -p wavscat-core
+        run: cargo test --release -p wavscat-core -p tapvid
       - name: Golden record, unoptimised
-        run: cargo test -p wavscat-core --test golden
+        run: cargo test -p wavscat-core -p tapvid --test golden
       - name: No platform transcendental functions
-        run: cargo clippy -p wavscat-core --all-targets -- -D clippy::disallowed_methods
+        run: cargo clippy -p wavscat-core -p tapvid --all-targets -- -D clippy::disallowed_methods
 
   wasi:
     name: wasm32-wasip1 under Node
@@ -44,7 +44,7 @@ jobs:
         with:
           node-version: 24
       - name: Build the golden test
-        run: cargo test --release --target wasm32-wasip1 -p wavscat-core --test golden --no-run
+        run: cargo test --release --target wasm32-wasip1 -p wavscat-core -p tapvid --test golden --no-run
       - name: Run it under WASI
         shell: bash
         run: |

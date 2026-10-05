@@ -17,6 +17,8 @@ disallowed-methods = [
   { path = "f64::cos", reason = "use crate::math::cos" },
   { path = "f64::sin_cos", reason = "use crate::math" },
   { path = "f64::tan", reason = "use crate::math" },
+  { path = "f64::atan2", reason = "use wavscat_core::math::atan2" },
+  { path = "f64::atan", reason = "use wavscat_core::math" },
   { path = "f64::hypot", reason = "use crate::math" },
   { path = "f64::cbrt", reason = "use crate::math" },
   { path = "f64::mul_add", reason = "fused multiply-add changes rounding" },

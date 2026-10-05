@@ -50,6 +50,12 @@ pub fn cos(x: f64) -> f64 {
     libm::cos(x)
 }
 
+/// The angle of the point `(x, y)` from the positive x axis, in `(-pi, pi]`.
+#[inline]
+pub fn atan2(y: f64, x: f64) -> f64 {
+    libm::atan2(y, x)
+}
+
 /// `2^k` for a small non-negative integer, exactly.
 #[inline]
 pub fn pow2(k: u32) -> f64 {

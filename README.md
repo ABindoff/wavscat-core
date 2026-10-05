@@ -81,7 +81,10 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
 - [x] JTFS renormalisation: each second-order path divided by S1 of the bands
       it spans, through the same frequential low-pass
-- [ ] Video tapping pipeline, as a separate crate
+- [ ] Video tapping pipeline (`crates/tapvid`): done are the PRNG, synthetic
+      ground truth, stage 4 resampling and stage 6 inter-tap intervals; to do
+      are ingest, preprocessing, the randomized SVD, component selection, JTFS
+      features, QC and the synthetic video generator
 - [ ] R binding through extendr; Python binding through PyO3
 
 ## Licence
