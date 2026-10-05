@@ -152,12 +152,19 @@ impl QcReport {
     }
 }
 
-/// Cycles whose interval and amplitude are both plausible: the interval
-/// within `factor` of the median either way, the amplitude at least
+/// Number of cycles whose interval and amplitude are both plausible; see
+/// [`usable_mask`].
+pub fn usable_cycles(itis: &[f64], amplitudes: &[f64], factor: f64, min_amp: f64) -> usize {
+    usable_mask(itis, amplitudes, factor, min_amp).iter().filter(|u| **u).count()
+}
+
+/// Which cycles have an interval and amplitude that are both plausible: the
+/// interval within `factor` of the median either way, the amplitude at least
 /// `min_amp` of the 90th percentile of amplitudes. The reference is a high
 /// quantile, not the median, because after a stop most cycles are noise and
-/// the median would be noise too. Pauses and stops fail one or both.
-pub fn usable_cycles(itis: &[f64], amplitudes: &[f64], factor: f64, min_amp: f64) -> usize {
+/// the median would be noise too. Pauses and stops fail one or both, and so
+/// does a stretch where the signal lost the hand.
+pub fn usable_mask(itis: &[f64], amplitudes: &[f64], factor: f64, min_amp: f64) -> Vec<bool> {
     let median = |v: &[f64]| {
         let mut s = v.to_vec();
         s.sort_by(|a, b| a.total_cmp(b));
@@ -178,8 +185,8 @@ pub fn usable_cycles(itis: &[f64], amplitudes: &[f64], factor: f64, min_amp: f64
     };
     itis.iter()
         .zip(amplitudes)
-        .filter(|(i, a)| **i >= mi / factor && **i <= mi * factor && **a >= min_amp * ma)
-        .count()
+        .map(|(i, a)| *i >= mi / factor && *i <= mi * factor && *a >= min_amp * ma)
+        .collect()
 }
 
 /// A trial: its QC report always, its analysis when it got that far.

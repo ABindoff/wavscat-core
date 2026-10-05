@@ -23,13 +23,15 @@
 //! - 7: [`features`], the named feature vector and its version stamp
 //! - 8: [`qc`], quality control and gating of whole trials
 //!
-//! [`pipeline`] runs stages 2 to 6 over a captured trial. [`synth`] and
+//! [`locate`] finds where in the frame the tapping is, window by window, and
+//! how far it moves. [`pipeline`] runs stages 2 to 6 over a captured trial. [`synth`] and
 //! [`synth_video`] generate signals and videos with known ground truth.
 #![forbid(unsafe_code)]
 
 pub mod features;
 pub mod ingest;
 pub mod linalg;
+pub mod locate;
 pub mod phase;
 pub mod pipeline;
 pub mod preprocess;

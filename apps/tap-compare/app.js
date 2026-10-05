@@ -474,6 +474,40 @@ function differenceTrace(slots, firstUs) {
 
 // ---------------------------------------------------------------- comparison
 
+/// Landmark image coordinates (0-1) to grid cells of the centre-cropped
+/// 64 x 48 grid, unmirrored, as the video pipeline sees the frame.
+function gridMapper(gw, gh) {
+  const { width, height } = state.camera;
+  const target = gw / gh;
+  let x0 = 0, y0 = 0, cwid = width, chei = height;
+  if (width / height > target) { cwid = height * target; x0 = (width - cwid) / 2; } else { chei = width / target; y0 = (height - chei) / 2; }
+  return (x, y) => ({ x: ((x * width - x0) / cwid) * gw, y: ((y * height - y0) / chei) * gh });
+}
+
+/// For each window the video located the tapping in, whether this hand's
+/// index and thumb tips (their mean position over the window) lie in the
+/// motion box, with a margin of one cell, and how far the index tip is from
+/// the box's centroid, in cells.
+function locationCheck(a, samples) {
+  const loc = a.locations;
+  if (!loc || !samples.length) return null;
+  const toGrid = gridMapper(loc.grid_width, loc.grid_height);
+  const t = samples.map((s) => (s.us - state.firstUs) / 1e6);
+  let windows = 0, inside = 0;
+  const dist = [];
+  for (const w of loc.windows) {
+    const sel = samples.filter((_, i) => t[i] >= w.t_start && t[i] <= w.t_end);
+    if (sel.length < 3) continue;
+    const at = (k) => toGrid(mean(sel.map((s) => s.h.x[k])), mean(sel.map((s) => s.h.y[k])));
+    const tips = [at(INDEX_TIP), at(THUMB_TIP)];
+    const inBox = (q) => q.x >= w.box_x0 - 1 && q.x <= w.box_x1 + 2 && q.y >= w.box_y0 - 1 && q.y <= w.box_y1 + 2;
+    windows += 1;
+    if (tips.every(inBox)) inside += 1;
+    dist.push(Math.hypot(tips[0].x - w.centroid_x, tips[0].y - w.centroid_y));
+  }
+  return { windows, inside, medianDistance: median(dist) };
+}
+
 const mean = (v) => v.reduce((a, b) => a + b, 0) / v.length;
 const median = (v) => {
   if (!v.length) return NaN;
@@ -623,6 +657,7 @@ function analyse() {
       waveform,
       timing: timingAgreement(a, tr.analysis, waveform),
       features: a.features ? featureAgreement(a.features, tr.analysis.features) : null,
+      location: slots[name] ? locationCheck(a, slots[name]) : null,
     };
   }
 
@@ -709,11 +744,12 @@ function renderResult(trial, key) {
     const tr = res.landmarks[name];
     const c = res.comparisons[name];
     const t = tr.analysis;
-    if (!t) return `<tr><td>${name}</td><td>${fmt(100 * tr.detected, 0)}%</td><td colspan="8" style="text-align:left">${tr.error ?? "hand not found often enough"}</td></tr>`;
+    if (!t) return `<tr><td>${name}</td><td>${fmt(100 * tr.detected, 0)}%</td><td colspan="10" style="text-align:left">${tr.error ?? "hand not found often enough"}</td></tr>`;
     return `<tr><td><span style="color:${COLOURS[name]()}">■</span> ${name}</td><td>${fmt(100 * tr.detected, 0)}%</td>
       <td>${fmt(t.f0_hz, 2)}</td><td>${c ? fmt(c.waveform.r, 2) : "–"}</td><td>${c ? fmt(c.waveform.lagMs, 0) : "–"}</td>
       <td>${c ? `${c.timing.matched}/${c.timing.of}` : "–"}</td><td>${c ? fmt(c.timing.offsetSdMs, 1) : "–"}</td>
-      <td>${c ? fmt(c.timing.itiMadMs, 1) : "–"}</td><td>${c ? fmt(c.timing.itiR, 2) : "–"}</td><td>${c?.features ? fmt(c.features.r, 3) : "–"}</td></tr>`;
+      <td>${c ? fmt(c.timing.itiMadMs, 1) : "–"}</td><td>${c ? fmt(c.timing.itiR, 2) : "–"}</td><td>${c?.features ? fmt(c.features.r, 3) : "–"}</td>
+      <td>${c?.location ? `${c.location.inside}/${c.location.windows}` : "–"}</td><td>${c?.location ? fmt(c.location.medianDistance, 1) : "–"}</td></tr>`;
   }).join("");
 
   el.innerHTML = `
@@ -723,13 +759,15 @@ function renderResult(trial, key) {
     <h3>Agreement with each hand's landmark trace</h3>
     <div class="scroll"><table>
       <tr><th>landmark trace</th><th>hand found</th><th>f<sub>0</sub> (Hz)</th><th>waveform r</th><th>lag (ms)</th><th>taps matched</th>
-        <th>timing SD (ms)</th><th>ITI |diff| (ms)</th><th>ITI r</th><th>JTFS feature r</th></tr>
+        <th>timing SD (ms)</th><th>ITI |diff| (ms)</th><th>ITI r</th><th>JTFS feature r</th><th>tips in motion box</th><th>index tip to box centre (cells)</th></tr>
       ${rows}
     </table></div>
-    <p class="note">The trace is thumb–index aperture over hand size. Waveform r is the correlation of the video component with the trace, at the best lag within ±300 ms; the component's sign is arbitrary. Taps are cycle boundaries from each analytic signal, aligned by the waveform lag and sign, then matched within half a cycle; their phase origins differ, so a constant offset is expected and the timing SD (the spread of the offset) is what matters. ITI |diff| is the mean absolute difference between matched inter-tap intervals.</p>
+    <p>${a?.locations ? `Motion box over ${a.locations.windows.length} windows of 2 s: travelled up to ${fmt(a.locations.travel, 1)} cells from its median position, largest jump between windows ${fmt(a.locations.max_step, 1)} cells (a cell is 1/64 of the frame width).` : `Motion box: ${a?.locate_error ?? "not computed"}.`}
+      ${a?.usable ? `Usable cycles: ${a.usable.filter((u) => u).length} of ${a.usable.length}.` : ""}</p>
+    <p class="note">The trace is thumb–index aperture over hand size. Waveform r is the correlation of the video component with the trace, at the best lag within ±300 ms; the component's sign is arbitrary. Taps are cycle boundaries from each analytic signal, aligned by the waveform lag and sign, then matched within half a cycle; their phase origins differ, so a constant offset is expected and the timing SD (the spread of the offset) is what matters. ITI |diff| is the mean absolute difference between matched inter-tap intervals. The motion box is where the video found brightness oscillating at the tapping rate, in each 2 s window; "tips in motion box" counts the windows whose box holds both the hand's mean index and thumb tip positions, within a cell.</p>
     <div class="grid2">
-      <div><h3>Video loading, and mean landmark positions</h3><canvas class="heat" id="heat-${key}"></canvas>
-        <div class="legend"><span>red/blue: the selected component's loading, by sign</span><span>● index tip</span><span>▲ thumb tip</span><span>■ wrist</span></div></div>
+      <div><h3>Video loading, motion boxes, and mean landmark positions</h3><canvas class="heat" id="heat-${key}"></canvas>
+        <div class="legend"><span>red/blue: the selected component's loading, by sign</span><span>outlines: motion box per window, later darker; line: its centre's path</span><span>● index tip</span><span>▲ thumb tip</span><span>■ wrist</span></div></div>
       <div><h3>Signals (standardised)</h3><canvas class="plot" id="sig-${key}"></canvas>
         <div class="legend">${legend(["video", ...names.filter((n) => res.landmarks[n].analysis)])}<span>ticks: tap boundaries</span></div>
         <h3>Inter-tap intervals (s)</h3><canvas class="plot" id="iti-${key}"></canvas></div>
@@ -757,7 +795,8 @@ function itiTable(res, names) {
   if (!a?.features) return `<p class="note">No video features: ${a?.features_error ?? "the analysis did not run"}.</p>`;
   const cols = names.filter((n) => res.landmarks[n].analysis);
   const head = `<tr><th>feature</th><th>video</th>${cols.map((n) => `<th>${n}</th>`).join("")}</tr>`;
-  const body = a.features.names.slice(0, 10).map((name, i) =>
+  const n = a.features.names.findIndex((x) => x.startsWith("jtfs_"));
+  const body = a.features.names.slice(0, n < 0 ? a.features.names.length : n).map((name, i) =>
     `<tr><td>${name}</td><td>${fmt(a.features.values[i], 4)}</td>${cols.map((n) => `<td>${fmt(res.landmarks[n].analysis.features.values[i], 4)}</td>`).join("")}</tr>`).join("");
   return `<table>${head}${body}</table>`;
 }
@@ -788,6 +827,25 @@ function drawHeat(c, a, landmarks) {
       g.fillStyle = `rgb(${r | 0},${gg | 0},${b | 0})`;
       g.fillRect((gw - 1 - x) * cw, y * ch, cw + 0.5, ch + 0.5);
     }
+  }
+  // Motion boxes, one per window, later ones darker, and the path of their
+  // centroids. The grid is unmirrored; the display is mirrored.
+  const loc = a.locations;
+  if (loc) {
+    const nwin = loc.windows.length;
+    loc.windows.forEach((win, i) => {
+      g.strokeStyle = `rgba(0,0,0,${0.15 + (0.6 * (i + 1)) / nwin})`;
+      g.lineWidth = 1.5;
+      g.strokeRect((gw - 1 - win.box_x1) * cw, win.box_y0 * ch, (win.box_x1 - win.box_x0 + 1) * cw, (win.box_y1 - win.box_y0 + 1) * ch);
+    });
+    g.strokeStyle = "#111";
+    g.lineWidth = 2;
+    g.beginPath();
+    loc.windows.forEach((win, i) => {
+      const X = w - win.centroid_x * cw, Y = win.centroid_y * ch;
+      i ? g.lineTo(X, Y) : g.moveTo(X, Y);
+    });
+    g.stroke();
   }
   // Landmarks: image coordinates to the centre-cropped grid, then mirrored.
   const { width, height } = state.camera;
@@ -924,9 +982,10 @@ function renderSummary() {
     const q = r.video.report.qc;
     const a = r.video.analysis;
     const lead = `<td>${title}</td><td>${fmt(q.effective_fps, 1)}</td><td>${fmt(100 * q.dropped_fraction, 1)}</td>
-      <td>${r.video.report.accepted ? "yes" : "no"}</td><td>${fmt(a?.f0_hz, 2)}</td><td>${fmt(a?.features?.values[3], 4)}</td>`;
+      <td>${r.video.report.accepted ? "yes" : "no"}</td><td>${fmt(a?.f0_hz, 2)}</td><td>${fmt(a?.features?.values[3], 4)}</td>
+      <td>${fmt(a?.locations?.travel, 1)}</td>`;
     if (!r.hand_tracking) {
-      rows.push(`<tr>${lead}<td>–</td><td colspan="6" style="text-align:left">hand tracking off</td></tr>`);
+      rows.push(`<tr>${lead}<td>–</td><td colspan="7" style="text-align:left">hand tracking off</td></tr>`);
       continue;
     }
     for (const [name, tr] of Object.entries(r.landmarks)) {
@@ -934,13 +993,13 @@ function renderSummary() {
       rows.push(`<tr>${lead}<td>${name}</td>
         <td>${fmt(tr.analysis?.f0_hz, 2)}</td><td>${c ? fmt(c.waveform.r, 2) : "–"}</td><td>${c ? fmt(c.timing.offsetSdMs, 1) : "–"}</td>
         <td>${c ? fmt(c.timing.itiMadMs, 1) : "–"}</td><td>${c?.features ? fmt(c.features.r, 3) : "–"}</td>
-        <td>${fmt(tr.analysis?.features.values[3], 4)}</td></tr>`);
+        <td>${fmt(tr.analysis?.features.values[3], 4)}</td><td>${c?.location ? `${c.location.inside}/${c.location.windows}` : "–"}</td></tr>`);
     }
   }
   $("summaryPanel").hidden = rows.length === 0;
-  $("summary").innerHTML = `<tr><th>trial</th><th>fps</th><th>dropped (%)</th><th>QC</th><th>video f<sub>0</sub> (Hz)</th><th>video ITI CV</th>
+  $("summary").innerHTML = `<tr><th>trial</th><th>fps</th><th>dropped (%)</th><th>QC</th><th>video f<sub>0</sub> (Hz)</th><th>video ITI CV</th><th>box travel (cells)</th>
     <th>landmark trace</th><th>trace f<sub>0</sub> (Hz)</th><th>waveform r</th><th>timing SD (ms)</th><th>ITI |diff| (ms)</th>
-    <th>JTFS feature r</th><th>trace ITI CV</th></tr>${rows.join("")}`;
+    <th>JTFS feature r</th><th>trace ITI CV</th><th>tips in motion box</th></tr>${rows.join("")}`;
 }
 
 function download() {

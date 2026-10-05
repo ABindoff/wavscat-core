@@ -22,8 +22,9 @@ use wasm_bindgen::prelude::*;
 
 use tapvid::features::{trace_features, trial_features, FeatureParams};
 use tapvid::ingest::{Ingest, IngestParams};
+use tapvid::locate::{locate, LocateParams, Locations};
 use tapvid::pipeline::{analyse_trace, PipelineParams};
-use tapvid::qc::{run_trial, QcParams};
+use tapvid::qc::{run_trial, usable_mask, QcParams};
 use tapvid::report::{report_of, trial_report, TrialReport};
 use tapvid::select::F0Case;
 use tapvid::synth::{frame_times, FrameClock, TapSpec};
@@ -146,8 +147,10 @@ impl TappingSession {
     /// the selected component on its uniform grid, its spatial loading over
     /// the `grid_width` x `grid_height` cells (row-major, top row first), the
     /// ranking of every component, the cycle boundaries, intervals and
-    /// amplitudes, the exposure trace, and the features, computed even for a
-    /// rejected trial. Times are seconds from the oldest held frame.
+    /// amplitudes with which cycles are usable, the exposure trace, the
+    /// features, computed even for a rejected trial, and where the tapping
+    /// was in each 2 s window (`locations`). Times are seconds from the
+    /// oldest held frame.
     pub fn diagnose(&self) -> Result<JsValue, JsError> {
         let mut pipeline = self.pipeline.clone();
         pipeline.svd.return_loadings = true;
@@ -158,7 +161,14 @@ impl TappingSession {
                 Ok(f) => (Some(Named { names: f.names, values: f.values }), None),
                 Err(e) => (None, Some(e.0)),
             };
+            let (locations, locate_error) = match locate(&self.ingest, r.f0_hz, &LocateParams::default()) {
+                Ok(l) => (Some(l), None),
+                Err(e) => (None, Some(e.0)),
+            };
             Analysis {
+                usable: usable_mask(&r.cycles.itis, &r.cycles.amplitudes, self.qc.usable_iti_factor, self.qc.usable_min_amplitude),
+                locations,
+                locate_error,
                 grid_width: self.grid.0,
                 grid_height: self.grid.1,
                 fs: pipeline.fs,
@@ -334,9 +344,14 @@ struct Analysis {
     boundaries: Vec<f64>,
     itis: Vec<f64>,
     amplitudes: Vec<f64>,
+    /// Whether each cycle in `itis` is usable, by the QC rule the interval
+    /// features use.
+    usable: Vec<bool>,
     gain_trace: Vec<f64>,
     features: Option<Named>,
     features_error: Option<String>,
+    locations: Option<Locations>,
+    locate_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -358,6 +373,7 @@ struct TraceAnalysis {
     boundaries: Vec<f64>,
     itis: Vec<f64>,
     amplitudes: Vec<f64>,
+    usable: Vec<bool>,
     features: Named,
     params_hash: String,
 }
@@ -372,7 +388,9 @@ pub fn analyse_trace_js(times: &[f64], values: &[f64]) -> Result<JsValue, JsErro
     let (p, q, f) = (PipelineParams::default(), QcParams::default(), FeatureParams::default());
     let r = analyse_trace(times, values, &p).map_err(js_err)?;
     let feats = trace_features(&r, &p, &q, &f).map_err(js_err)?;
+    let usable = usable_mask(&r.cycles.itis, &r.cycles.amplitudes, q.usable_iti_factor, q.usable_min_amplitude);
     let out = TraceAnalysis {
+        usable,
         t0: r.t0,
         fs: p.fs,
         score: r.periodicity.score,

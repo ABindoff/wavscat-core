@@ -65,6 +65,12 @@ pub struct VideoSpec {
     /// The whole frame shifts horizontally at this rate (Hz) by up to this
     /// many pixels, as a shaking camera would.
     pub camera_shake: Option<(f64, f64)>,
+    /// The hand drifts: its rest position moves by this much per second, as
+    /// fractions of the width and height.
+    pub drift: Option<(f64, f64)>,
+    /// The hand moves: from this time, in seconds, it rests at this new
+    /// centre, as fractions of the width and height.
+    pub relocate: Option<(f64, (f64, f64))>,
     pub seed: u64,
 }
 
@@ -88,6 +94,8 @@ impl Default for VideoSpec {
             distractor: None,
             stop_at: None,
             camera_shake: None,
+            drift: None,
+            relocate: None,
             seed: 1,
         }
     }
@@ -182,8 +190,16 @@ impl VideoSynth {
         let wave = s.tap.fundamental * math::cos(ph) + s.tap.second_harmonic * math::cos(2.0 * ph + 1.0);
         let stopped = matches!(s.stop_at, Some(at) if t >= at);
         let amp = if stopped { 0.0 } else { s.tap.amplitude + s.tap.amplitude_slope * t };
-        let cx = s.centre.0 * w as f64;
-        let cy = s.centre.1 * h as f64 + s.displacement * amp * wave;
+        let (mut fx, mut fy) = match s.relocate {
+            Some((at, centre)) if t >= at => centre,
+            _ => s.centre,
+        };
+        if let Some((vx, vy)) = s.drift {
+            fx += vx * t;
+            fy += vy * t;
+        }
+        let cx = fx * w as f64;
+        let cy = fy * h as f64 + s.displacement * amp * wave;
         add_blob(work, w, h, cx, cy, s.radius, s.contrast);
 
         if let Some(d) = &s.distractor {

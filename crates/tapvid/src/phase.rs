@@ -278,6 +278,64 @@ fn phase_diffusion(phase: &[f64], fs: f64, f0: f64, lags: usize) -> f64 {
     if den > 0.0 { num / (2.0 * den) } else { f64::NAN }
 }
 
+/// The summary of only the cycles marked in `keep`, for features that must
+/// not be distorted by pauses or by stretches where the signal lost the hand.
+/// The lag-1 autocorrelation uses only pairs of consecutive kept cycles, so
+/// that the intervals either side of a gap are not taken as neighbours:
+/// `(sum of pair products / pairs) / (sum of squares / n)`. Phase diffusion,
+/// a property of the whole phase trace, is passed through. Statistics that
+/// need more kept cycles than there are come out as NaN.
+pub fn summarise_kept(cycles: &CycleAnalysis, keep: &[bool]) -> ItiSummary {
+    let kept_bounds = &cycles.boundaries[1..cycles.boundaries.len() - 1];
+    let mut itis = Vec::new();
+    let mut amps = Vec::new();
+    let mut mids = Vec::new();
+    for (i, k) in keep.iter().enumerate() {
+        if *k {
+            itis.push(cycles.itis[i]);
+            amps.push(cycles.amplitudes[i]);
+            mids.push(0.5 * (kept_bounds[i] + kept_bounds[i + 1]));
+        }
+    }
+    let n = itis.len();
+    if n == 0 {
+        let nan = f64::NAN;
+        return ItiSummary {
+            n_cycles: 0,
+            mean: nan,
+            sd: nan,
+            cv: nan,
+            median: nan,
+            mad: nan,
+            robust_cv: nan,
+            lag1_autocorrelation: nan,
+            mean_amplitude: nan,
+            amplitude_slope: nan,
+            relative_amplitude_slope: nan,
+            phase_diffusion: cycles.summary.phase_diffusion,
+        };
+    }
+    let mut s = summarise(&itis, &amps, &mids, cycles.summary.phase_diffusion);
+    // Lag 1 over consecutive kept pairs only.
+    let m = s.mean;
+    let (mut ss, mut c, mut pairs) = (0.0, 0.0, 0usize);
+    for x in &itis {
+        ss += (x - m) * (x - m);
+    }
+    for i in 1..keep.len() {
+        if keep[i - 1] && keep[i] {
+            c += (cycles.itis[i - 1] - m) * (cycles.itis[i] - m);
+            pairs += 1;
+        }
+    }
+    s.lag1_autocorrelation = if pairs >= 2 && ss > 0.0 { (c / pairs as f64) / (ss / n as f64) } else { f64::NAN };
+    if n < 2 {
+        s.amplitude_slope = f64::NAN;
+        s.relative_amplitude_slope = f64::NAN;
+    }
+    s
+}
+
 fn summarise(itis: &[f64], amplitudes: &[f64], mids: &[f64], phase_diffusion: f64) -> ItiSummary {
     let n = itis.len();
     let m = mean(itis);

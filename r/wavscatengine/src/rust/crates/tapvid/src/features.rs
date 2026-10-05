@@ -3,9 +3,10 @@
 //!
 //! Two sets of features describe the selected tapping component:
 //!
-//! - from stage 6, the inter-tap intervals and amplitude: mean, SD, CV,
-//!   robust equivalents, lag-1 autocorrelation, relative amplitude slope and
-//!   phase diffusion;
+//! - from stage 6, the inter-tap intervals and amplitude over the usable
+//!   cycles: mean, SD, CV, robust equivalents, lag-1 autocorrelation,
+//!   relative amplitude slope and phase diffusion, and how much was left out
+//!   as hesitations;
 //! - from joint time-frequency scattering (wavscat-core), modulation
 //!   features: period jitter moves energy between adjacent first-order bands,
 //!   which lands in the second-order and frequential-modulation paths.
@@ -30,13 +31,17 @@ use wavscat_core::features::log_compress;
 use wavscat_core::jtfs::{ParamsJtfs, ScatteringJtfs};
 use wavscat_core::Error;
 
-use crate::phase::ItiSummary;
+use crate::phase::{summarise_kept, CycleAnalysis};
 use crate::pipeline::{PipelineParams, TraceResult, TrialResult};
-use crate::qc::QcParams;
+use crate::qc::{usable_mask, QcParams};
 
 /// Version of the feature definitions: names, order and meaning. Bumped
 /// whenever a feature is added, removed or redefined.
-pub const FEATURE_SCHEMA_VERSION: u32 = 1;
+///
+/// - 2: interval and amplitude features over usable cycles only (see
+///   [`usable_mask`]); lag-1 autocorrelation over consecutive usable pairs;
+///   `usable_fraction`, `hesitations` and `longest_hesitation_s` added.
+pub const FEATURE_SCHEMA_VERSION: u32 = 2;
 
 /// Settings for the scattering features.
 #[derive(Debug, Clone)]
@@ -113,7 +118,15 @@ pub fn jtfs_features(signal: &[f64], fs: f64, p: &FeatureParams) -> Result<(Vec<
 }
 
 /// Names of the interval and amplitude features, in vector order.
-pub const ITI_FEATURES: [&str; 10] = [
+///
+/// All but the last three use only the usable cycles, by the same rule QC
+/// counts them with, so that a pause, or a stretch where the signal lost the
+/// hand, does not distort them. The last three describe what was left out:
+/// the fraction of cycles usable, the number of hesitations (runs of
+/// consecutive unusable cycles) and the longest, in seconds. From video
+/// alone, a real hesitation and a moment when the signal lost the hand look
+/// the same, so these are only as clean as the tracking.
+pub const ITI_FEATURES: [&str; 13] = [
     "f0_hz",
     "iti_mean",
     "iti_sd",
@@ -124,6 +137,9 @@ pub const ITI_FEATURES: [&str; 10] = [
     "iti_lag1",
     "amplitude_relative_slope",
     "phase_diffusion",
+    "usable_fraction",
+    "hesitations",
+    "longest_hesitation_s",
 ];
 
 /// The full feature vector of an analysed trial.
@@ -133,7 +149,7 @@ pub fn trial_features(
     qc: &QcParams,
     p: &FeatureParams,
 ) -> Result<Features, Error> {
-    features_of(r.f0_hz, &r.cycles.summary, &r.signal, pipeline, qc, p)
+    features_of(r.f0_hz, &r.cycles, &r.signal, pipeline, qc, p)
 }
 
 /// The same feature vector for a trace analysed by
@@ -145,17 +161,42 @@ pub fn trace_features(
     qc: &QcParams,
     p: &FeatureParams,
 ) -> Result<Features, Error> {
-    features_of(r.f0_hz, &r.cycles.summary, &r.signal, pipeline, qc, p)
+    features_of(r.f0_hz, &r.cycles, &r.signal, pipeline, qc, p)
+}
+
+/// Hesitations among the cycles: runs of consecutive unusable cycles. Their
+/// number, and the longest one's duration in seconds.
+pub fn hesitations(cycles: &CycleAnalysis, usable: &[bool]) -> (usize, f64) {
+    let (mut count, mut longest, mut run) = (0usize, 0.0f64, 0.0f64);
+    let mut inside = false;
+    for (u, iti) in usable.iter().zip(&cycles.itis) {
+        if *u {
+            inside = false;
+            run = 0.0;
+        } else {
+            if !inside {
+                count += 1;
+                inside = true;
+            }
+            run += iti;
+            longest = longest.max(run);
+        }
+    }
+    (count, longest)
 }
 
 fn features_of(
     f0_hz: f64,
-    s: &ItiSummary,
+    cycles: &CycleAnalysis,
     signal: &[f64],
     pipeline: &PipelineParams,
     qc: &QcParams,
     p: &FeatureParams,
 ) -> Result<Features, Error> {
+    let usable = usable_mask(&cycles.itis, &cycles.amplitudes, qc.usable_iti_factor, qc.usable_min_amplitude);
+    let s = summarise_kept(cycles, &usable);
+    let n_usable = usable.iter().filter(|u| **u).count();
+    let (n_hesitations, longest) = hesitations(cycles, &usable);
     let mut names: Vec<String> = ITI_FEATURES.iter().map(|n| n.to_string()).collect();
     let mut values = vec![
         f0_hz,
@@ -168,6 +209,9 @@ fn features_of(
         s.lag1_autocorrelation,
         s.relative_amplitude_slope,
         s.phase_diffusion,
+        n_usable as f64 / usable.len().max(1) as f64,
+        n_hesitations as f64,
+        longest,
     ];
     let (jn, jv) = jtfs_features(signal, pipeline.fs, p)?;
     names.extend(jn);

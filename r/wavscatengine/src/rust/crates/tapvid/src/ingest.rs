@@ -219,6 +219,11 @@ impl Ingest {
         self.len == 0
     }
 
+    /// Grid width and height, in cells.
+    pub fn grid(&self) -> (usize, usize) {
+        (self.p.grid_width, self.p.grid_height)
+    }
+
     /// Cells per frame.
     pub fn cells(&self) -> usize {
         self.cells

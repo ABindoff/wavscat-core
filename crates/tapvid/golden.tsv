@@ -9,8 +9,9 @@ video	signal	3f1d233ad74825f2
 video	selection	5694e2f3034f6f40
 video	boundaries	df585805fffc41bf
 video	qc	c0fa2d5ca0bec45c
-video	features	aee1e1f971c98089
-video	params_hash	6184161f55870ff8
+video	features	72735bddd67c09d2
+video	params_hash	0cc440d8380448a7
+video	locations	8646563cc28e0f9f
 svd	singular_values	9ce3b78491c549b1
 svd	scores	a6e5ed983a4d5b89
 svd	loadings	9f46ee86a1fef0e0

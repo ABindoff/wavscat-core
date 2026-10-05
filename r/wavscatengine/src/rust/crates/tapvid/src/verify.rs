@@ -17,6 +17,7 @@ use std::fmt::Write as _;
 
 use crate::features::{trial_features, FeatureParams};
 use crate::ingest::{Ingest, IngestParams};
+use crate::locate::{locate, LocateParams};
 use crate::phase::{analyse, analyse_at, PhaseParams};
 use crate::pipeline::{analyse_trial, PipelineParams};
 use crate::qc::{run_trial, QcParams};
@@ -133,6 +134,29 @@ pub fn golden_report() -> String {
     let feats = trial_features(&trial, &PipelineParams::default(), &QcParams::default(), &fp).unwrap();
     writeln!(out, "video\tfeatures\t{:016x}", hash(feats.values.iter().copied())).unwrap();
     writeln!(out, "video\tparams_hash\t{}", feats.params_hash).unwrap();
+    let loc = locate(&ving, trial.f0_hz, &LocateParams::default()).unwrap();
+    let lf = loc
+        .windows
+        .iter()
+        .flat_map(|w| {
+            [
+                w.t_start,
+                w.t_end,
+                w.frames as f64,
+                w.peak_x as f64,
+                w.peak_y as f64,
+                w.box_x0 as f64,
+                w.box_y0 as f64,
+                w.box_x1 as f64,
+                w.box_y1 as f64,
+                w.centroid_x,
+                w.centroid_y,
+                w.concentration,
+                w.energy,
+            ]
+        })
+        .chain([loc.travel, loc.max_step]);
+    writeln!(out, "video\tlocations\t{:016x}", hash(lf)).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.
