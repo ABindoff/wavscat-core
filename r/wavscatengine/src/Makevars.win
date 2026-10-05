@@ -1,0 +1,17 @@
+# Windows: Rust's GNU target, linked with Rtools. Install it once with
+#   rustup target add x86_64-pc-windows-gnu
+TARGET = x86_64-pc-windows-gnu
+TARGET_DIR = ./rust/target
+LIBDIR = $(TARGET_DIR)/$(TARGET)/release
+STATLIB = $(LIBDIR)/libwavscatengine.a
+PKG_LIBS = -L$(LIBDIR) -lwavscatengine -lws2_32 -ladvapi32 -luserenv -lbcrypt -lntdll
+
+all: $(SHLIB)
+
+$(SHLIB): $(STATLIB)
+
+$(STATLIB):
+	cargo build --release --target=$(TARGET) --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
+
+clean:
+	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) rust/target

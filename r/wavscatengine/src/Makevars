@@ -1,0 +1,16 @@
+# Build the Rust static library, then link it into the package's shared
+# object. Needs cargo on the PATH; see SystemRequirements in DESCRIPTION.
+TARGET_DIR = ./rust/target
+LIBDIR = $(TARGET_DIR)/release
+STATLIB = $(LIBDIR)/libwavscatengine.a
+PKG_LIBS = -L$(LIBDIR) -lwavscatengine
+
+all: $(SHLIB)
+
+$(SHLIB): $(STATLIB)
+
+$(STATLIB):
+	cargo build --release --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR)
+
+clean:
+	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) rust/target

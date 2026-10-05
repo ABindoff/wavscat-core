@@ -61,6 +61,30 @@ S.path(5);                        // one path's coefficients
 Parameter names are the R argument names, so one parameter set means the same
 thing in every language. Unknown names are rejected.
 
+## R
+
+The R package [wavscat](https://github.com/ABindoff/wavscat) computes
+everything in base R and needs no compiler. The optional companion package
+`r/wavscatengine` adds this engine: with it installed, wavscat computes the
+coefficients in Rust, bit-for-bit identically to Python and the browser
+(`options(wavscat.engine = "auto")`, the default; `"r"` opts out). It also
+runs the webcam tapping pipeline from R:
+
+```r
+remotes::install_github("ABindoff/wavscat-core", subdir = "r/wavscatengine")
+wavscatengine::engine_verify()   # character(0): this machine has the reference bits
+session <- wavscatengine::tapping_session()
+wavscatengine::tapping_push(session, frame, width, height, timestamp_us)
+report <- wavscatengine::tapping_finish(session)
+```
+
+It needs Rust (`cargo`) and, on Windows, Rtools and the GNU target
+(`rustup target add x86_64-pc-windows-gnu`). The binding is plain C and
+`.Call`, without extendr: Rust exports a few C functions, and `src/init.c`
+turns their results into R lists. The package carries its own copy of the
+crates it needs, refreshed by `tools/sync-r-engine.sh`; CI fails if the copy
+drifts.
+
 ## Python
 
 `crates/wavscat-py` builds a `wavscat` module with maturin
@@ -145,7 +169,11 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
     with known ground truth, and the wasm `TappingSession`
 - [x] Python binding through PyO3 (`crates/wavscat-py`), tested in CI on Linux
       (x86-64 and ARM64), macOS and Windows
-- [ ] R binding through extendr, replacing the pure-R engine in `wavscat`
+- [x] R: the optional `wavscatengine` package (plain C and `.Call`, no
+      extendr), used automatically by `wavscat` when installed; tested in CI
+      on Linux, macOS and Windows
+- [ ] CRAN: vendor the crates.io dependencies (`cargo vendor`) for an
+      offline build, then the `cran-rust` checklist
 
 ## Licence
 
