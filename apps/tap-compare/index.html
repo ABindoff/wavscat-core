@@ -30,6 +30,11 @@
   .cam .big { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 5rem; font-weight: 700; color: #fff; text-shadow: 0 2px 12px #000a; pointer-events: none; }
   .bar { height: 6px; background: var(--line); border-radius: 3px; margin-top: 8px; overflow: hidden; }
   .bar > div { height: 100%; width: 0; background: var(--video); }
+  .bar > div.processing { background: var(--left); }
+  .phase { font-size: 0.82rem; color: var(--muted); min-height: 1.2em; margin-top: 4px; }
+  .cam .badge { position: absolute; top: 10px; left: 10px; padding: 3px 10px; border-radius: 999px; background: #000a; color: #fff; font-size: 0.85rem; pointer-events: none; }
+  .cam .fps { position: absolute; bottom: 8px; right: 10px; padding: 2px 8px; border-radius: 6px; background: #0008; color: #fff; font-size: 0.78rem; font-variant-numeric: tabular-nums; pointer-events: none; }
+  .cam .fps:empty { display: none; }
   button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
   button:disabled { opacity: 0.45; cursor: default; }
@@ -70,8 +75,11 @@
           <video id="video" playsinline muted></video>
           <canvas id="overlay"></canvas>
           <div class="big" id="big"></div>
+          <div class="badge" id="badge" hidden></div>
+          <div class="fps" id="fps"></div>
         </div>
         <div class="bar"><div id="progress"></div></div>
+        <div class="phase" id="phase"></div>
       </div>
       <div>
         <h2 id="trialTitle">Starting…</h2>
@@ -90,9 +98,11 @@
               <option value="1">full size</option>
             </select>
           </label>
+          <label><input type="checkbox" id="saveVideo" checked> Save each trial's video</label>
+          <label class="replay">Replay a saved video <input type="file" id="replay" accept=".tapraw"></label>
         </div>
         <div class="status" id="status"></div>
-        <p class="note">Sit so both hands fit in the frame, palms towards the camera, about an arm's length away, in even light. Turn hand tracking off to record the video pipeline alone, for instance to see whether MediaPipe costs the camera frames; a video-only recording is kept alongside the one with landmarks. Hands are named as the person's own: their left hand appears on the right of the camera image, which this preview shows mirrored.</p>
+        <p class="note">Sit so both hands fit in the frame, palms towards the camera, about an arm's length away, in even light. Turn hand tracking off to record the video pipeline alone, for instance to see whether MediaPipe costs the camera frames; a video-only recording is kept alongside the one with landmarks. Each trial's raw video is saved as a .tapraw file (about 100 MB for 10 s at 640 x 480), with the camera's capture times, so it can be replayed through a later version of the pipeline and of this comparison. Hands are named as the person's own: their left hand appears on the right of the camera image, which this preview shows mirrored.</p>
       </div>
     </div>
   </section>

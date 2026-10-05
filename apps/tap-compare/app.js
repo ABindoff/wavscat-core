@@ -86,6 +86,12 @@ const state = {
   results: {},
   camera: null,
   verified: null,
+  cameraLive: false,
+  // Capture times of recent frames, for the live frame-rate display.
+  recentUs: [],
+  lastFpsShown: 0,
+  // When the trial being processed came from a saved file.
+  replay: null,
 };
 // For testing from the console or a headless browser.
 window.tapCompare = { state, TRIALS };
@@ -129,6 +135,7 @@ async function startCamera() {
   await video.play();
   const track = stream.getVideoTracks()[0];
   const s = track.getSettings();
+  state.cameraLive = true;
   state.camera = { width: video.videoWidth, height: video.videoHeight, frameRate: s.frameRate ?? null, label: track.label };
   const overlay = $("overlay");
   overlay.width = video.videoWidth;
@@ -157,6 +164,28 @@ async function startCamera() {
 
 // ---------------------------------------------------------------- capture
 
+/// The live frame rate, from the last second of capture times.
+function noteFrame(us) {
+  const r = state.recentUs;
+  r.push(us);
+  while (r.length > 2 && us - r[0] > 1e6) r.shift();
+  const now = performance.now();
+  if (now - state.lastFpsShown > 500 && r.length > 2) {
+    state.lastFpsShown = now;
+    const fps = ((r.length - 1) * 1e6) / (r[r.length - 1] - r[0]);
+    $("fps").textContent = `${fps.toFixed(1)} fps${state.camera?.frameRate ? ` (asked ${state.camera.frameRate})` : ""}`;
+  }
+}
+
+function badge(text) {
+  $("badge").hidden = !text;
+  $("badge").textContent = text ?? "";
+}
+
+function clearOverlay() {
+  $("overlay").getContext("2d").clearRect(0, 0, $("overlay").width, $("overlay").height);
+}
+
 /// The countdown before recording, driven by whichever frames arrive.
 function tickCountdown() {
   if (state.phase !== "countdown") return;
@@ -165,6 +194,10 @@ function tickCountdown() {
   if (elapsed >= COUNTDOWN_SEC) {
     state.phase = "recording";
     $("big").textContent = "";
+    // Hand tracking pauses while recording, so that nothing competes with
+    // the camera; take down the last preview drawing rather than freeze it.
+    clearOverlay();
+    badge("● Recording (hand tracking paused)");
   }
 }
 
@@ -176,6 +209,7 @@ function keep(rec) {
   state.recording.push(rec);
   const elapsed = (rec.us - state.firstUs) / 1e6;
   $("progress").style.width = `${Math.min(100, (100 * elapsed) / RECORD_SEC)}%`;
+  $("phase").textContent = `Recording: ${Math.min(elapsed, RECORD_SEC).toFixed(1)} of ${RECORD_SEC} s`;
   if (elapsed >= RECORD_SEC) {
     state.phase = "processing";
     setTimeout(processRecording, 0);
@@ -189,6 +223,7 @@ async function pumpFrames(reader) {
     if (done) return;
     tickCountdown();
     const us = frame.timestamp;
+    noteFrame(us);
     if (state.phase === "recording" && (state.lastUs === null || us > state.lastUs)) {
       // Copy in the camera's own format and release the frame at once: a
       // held frame starves the camera of buffers.
@@ -230,6 +265,7 @@ function scheduleFallbackFrame() {
 function onFallbackFrame(us) {
   const video = $("video");
   tickCountdown();
+  noteFrame(us);
   if (state.phase === "recording" && (state.lastUs === null || us > state.lastUs)) {
     const { width: w, height: h } = state.canvas;
     state.ctx.drawImage(video, 0, 0, w, h);
@@ -317,7 +353,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function processRecording() {
   const rec = state.recording;
-  $("progress").style.width = "100%";
+  badge(state.tracking ? "Hand tracking the recording…" : "Analysing…");
+  $("progress").style.width = "0";
+  $("progress").classList.add("processing");
+  $("phase").textContent = state.tracking ? "Hand tracking: starting" : "Analysing";
+  if (!state.replay && $("saveVideo").checked) state.videoFile = saveVideo(rec);
+  else state.videoFile = state.replay?.name ?? null;
   state.frameFormat = rec[0]?.format ?? null;
   status(`Recorded ${rec.length} frames (${state.frameFormat}). Running the tapping pipeline…`);
   await sleep(0);
@@ -339,12 +380,15 @@ async function processRecording() {
       state.byId.set(i, state.frames[i]);
       sendToWorker(i, base + (r.us - state.firstUs) / 1000, frame);
       $("progress").style.width = `${(100 * (i + 1)) / rec.length}%`;
-      if (i % 10 === 0) status(`Hand tracking: frame ${i + 1} of ${rec.length}…`);
+      if (i % 10 === 0) $("phase").textContent = `Hand tracking: frame ${i + 1} of ${rec.length}`;
     }
     while (state.byId.size > 0) await sleep(5);
   }
-  // The raw frames are no longer needed.
+  // The raw frames are no longer needed here; a saved video keeps them.
   state.recording = [];
+  $("progress").classList.remove("processing");
+  $("phase").textContent = "";
+  badge(null);
   state.phase = "analysing";
   status("Analysing…");
   setTimeout(analyse, 0);
@@ -397,11 +441,84 @@ function startRecording() {
   state.lastUs = null;
   state.phase = "countdown";
   state.phaseStart = performance.now();
-  $("overlay").getContext("2d").clearRect(0, 0, $("overlay").width, $("overlay").height);
+  state.replay = null;
+  clearOverlay();
+  $("progress").classList.remove("processing");
   $("record").disabled = true;
   $("next").disabled = true;
   $("progress").style.width = "0";
   status("Get ready…");
+}
+
+// ---------------------------------------------------------------- saved videos
+
+// A .tapraw file: the 8 bytes "TAPRAW01", a little-endian u32 header length,
+// a UTF-8 JSON header, then every frame's bytes back to back, exactly as the
+// camera gave them. The header holds each frame's capture time in
+// microseconds, pixel format, size and plane layout, so nothing is lost:
+// both the tapping pipeline and MediaPipe can be replayed from it.
+const TAPRAW_MAGIC = "TAPRAW01";
+
+function saveVideo(rec) {
+  const trial = TRIALS[state.trialIndex];
+  const header = {
+    version: 1,
+    trial: trial.id,
+    recorded: new Date().toISOString(),
+    camera: state.camera,
+    timestamp_source: state.timeSource,
+    frames: rec.map((r) => ({ us: r.us, format: r.format, w: r.w, h: r.h, layout: r.layout, bytes: r.buf.byteLength })),
+  };
+  const json = new TextEncoder().encode(JSON.stringify(header));
+  const len = new Uint8Array(4);
+  new DataView(len.buffer).setUint32(0, json.length, true);
+  const blob = new Blob([new TextEncoder().encode(TAPRAW_MAGIC), len, json, ...rec.map((r) => r.buf)], { type: "application/octet-stream" });
+  const name = `tap-compare-${trial.id}-${header.recorded.replace(/[:.]/g, "-")}.tapraw`;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  return name;
+}
+
+async function readVideo(file) {
+  const head = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+  if (new TextDecoder().decode(head.slice(0, 8)) !== TAPRAW_MAGIC) throw new Error(`${file.name} is not a .tapraw video.`);
+  const n = new DataView(head.buffer).getUint32(8, true);
+  const header = JSON.parse(new TextDecoder().decode(await file.slice(12, 12 + n).arrayBuffer()));
+  let offset = 12 + n;
+  const frames = [];
+  for (const f of header.frames) {
+    const buf = await file.slice(offset, offset + f.bytes).arrayBuffer();
+    offset += f.bytes;
+    frames.push({ us: f.us, buf, layout: f.layout, format: f.format, w: f.w, h: f.h });
+  }
+  return { header, frames };
+}
+
+/// Analyse a saved video exactly as a fresh recording: same frames, same
+/// capture times, with the current pipeline and comparison.
+async function replayVideo(file) {
+  if (state.phase !== "preview" && state.phase !== "idle") throw new Error("Wait until the current trial is finished.");
+  status(`Reading ${file.name}…`);
+  const { header, frames } = await readVideo(file);
+  const index = TRIALS.findIndex((t) => t.id === header.trial);
+  if (index < 0) throw new Error(`Unknown trial "${header.trial}" in ${file.name}.`);
+  state.trialIndex = index;
+  showTrial();
+  state.camera ??= header.camera;
+  readOptions();
+  sizeMediapipe();
+  state.timeSource = header.timestamp_source;
+  state.replay = { name: file.name };
+  state.recording = frames;
+  state.firstUs = frames[0].us;
+  state.lastUs = frames[frames.length - 1].us;
+  state.phase = "processing";
+  lockOptions(true);
+  $("record").disabled = true;
+  await processRecording();
 }
 
 // ---------------------------------------------------------------- landmark traces
@@ -608,7 +725,8 @@ function featureAgreement(fv, ft) {
 // ---------------------------------------------------------------- analysis
 
 function resultKey(trial, tracking) {
-  return tracking ? trial.id : `${trial.id}-video`;
+  const key = tracking ? trial.id : `${trial.id}-video`;
+  return state.replay ? `${key}-replay` : key;
 }
 
 function analyse() {
@@ -666,6 +784,8 @@ function analyse() {
 
   state.results[key] = {
     trial: trial.id,
+    replay_of: state.replay?.name ?? null,
+    video_file: state.videoFile,
     hand_tracking: state.tracking,
     mediapipe_input: state.tracking ? { ...state.mpSize } : null,
     timestamp_source: state.timeSource,
@@ -688,7 +808,8 @@ function analyse() {
   renderResult(trial, key);
   renderSummary();
   renderChips();
-  $("record").disabled = false;
+  // A replay can run before the camera is started; recording needs it.
+  $("record").disabled = !state.cameraLive;
   $("next").disabled = state.trialIndex >= TRIALS.length - 1;
   $("download").disabled = false;
   lockOptions(false);
@@ -756,7 +877,7 @@ function renderResult(trial, key) {
   }).join("");
 
   el.innerHTML = `
-    <h2>${trial.title}${res.hand_tracking ? "" : " (video only)"}</h2>
+    <h2>${trial.title}${res.hand_tracking ? "" : " (video only)"}${res.replay_of ? ` (replay of ${res.replay_of})` : ""}</h2>
     <p>Video pipeline: ${verdict}. ${a ? `f<sub>0</sub> = ${fmt(a.f0_hz, 2)} Hz${a.from_harmonic ? " (timed from its second harmonic)" : ""}, component ${a.component + 1} of ${a.ranking.length}, ${a.itis.length} intervals, loading spread ${fmt(a.loading_spread, 3)}, competitor ratio ${fmt(a.competitor_ratio, 2)}.` : ""}
       ${res.frames} frames (${fmt(diag.report.qc.effective_fps, 1)} fps effective).</p>
     <h3>Agreement with each hand's landmark trace</h3>
@@ -981,7 +1102,7 @@ function renderSummary() {
   const rows = [];
   for (const r of Object.values(state.results)) {
     const t = TRIALS.find((x) => x.id === r.trial);
-    const title = `${t.title}${r.hand_tracking ? "" : " (video only)"}`;
+    const title = `${t.title}${r.hand_tracking ? "" : " (video only)"}${r.replay_of ? " (replay)" : ""}`;
     const q = r.video.report.qc;
     const a = r.video.analysis;
     const lead = `<td>${title}</td><td>${fmt(q.effective_fps, 1)}</td><td>${fmt(100 * q.dropped_fraction, 1)}</td>
@@ -1032,4 +1153,9 @@ $("tracking").onchange = () => {
   if (state.phase === "preview" && $("record").disabled && !state.tracking) $("record").disabled = false;
 };
 $("mpScale").onchange = readOptions;
+$("replay").onchange = (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (file) replayVideo(file).catch((err) => status(`Replay failed: ${err.message}`));
+};
 setup().catch((e) => status(`Setup failed: ${e.message}`));

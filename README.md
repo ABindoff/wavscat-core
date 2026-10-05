@@ -153,7 +153,12 @@ behind each verdict.
 
 The page loads MediaPipe from jsDelivr and its hand model from Google; no
 frame leaves the browser. The JSON download holds the reports, the traces and
-the landmark coordinates, but no images.
+the landmark coordinates, but no images. Each trial's raw video can also be
+saved, as a `.tapraw` file holding the frames exactly as the camera gave them
+with their capture times (about 100 MB for 10 s at 640 x 480). The page
+replays a saved video through the current pipeline and MediaPipe, and
+`node tools/replay-tapraw.mjs trial.tapraw` replays it through the pipeline
+alone and prints its QC, camera clock, rhythm, motion box and features.
 
 To refresh the fixtures from the R package, run
 `Rscript tools/export-fixtures.R ../wavscat/tests/testthat/fixtures fixtures`.
