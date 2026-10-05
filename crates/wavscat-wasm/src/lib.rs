@@ -224,6 +224,7 @@ fn check_signal(x: &[f64], n: usize) -> Result<(), JsError> {
 /// Every block is a `rows x cols` matrix stored by rows, bands by time. Time
 /// scattering and time-format joint paths have one row.
 #[wasm_bindgen]
+#[derive(Clone)]
 pub struct Coefficients {
     data: Vec<f64>,
     rows: Vec<u32>,
@@ -415,7 +416,62 @@ impl ScatteringJtfs {
     pub fn transform(&self, x: &[f64]) -> Result<Coefficients, JsError> {
         check_signal(x, self.op.time.n)?;
         let coefs = self.op.transform(x).map_err(js_err)?;
-        Ok(Coefficients::from_blocks(coefs.into_iter().map(|m| (m.rows, m.cols, m.data))))
+        Ok(mats_to_coefs(coefs))
+    }
+
+    /// Transform one signal, also returning the first-order time scattering
+    /// coefficients S1 (one block per band) that `renorm` divides by.
+    #[wasm_bindgen(js_name = transformWithS1)]
+    pub fn transform_with_s1(&self, x: &[f64]) -> Result<JtfsOutput, JsError> {
+        check_signal(x, self.op.time.n)?;
+        let (coefs, s1) = self.op.transform_with_s1(x).map_err(js_err)?;
+        let s1_rows = (0..s1.rows).map(|r| (1, s1.cols, s1.row(r).to_vec())).collect::<Vec<_>>();
+        Ok(JtfsOutput { coefs: mats_to_coefs(coefs), s1: Coefficients::from_blocks(s1_rows) })
+    }
+
+    /// Divide second-order paths by S1 of the bands they span, through the
+    /// same frequential low-pass, plus `eps`. Needs local time averaging.
+    pub fn renorm(&self, out: &JtfsOutput, eps: f64) -> Result<Coefficients, JsError> {
+        let mut mats: Vec<jtfs::Mat> = (0..out.coefs.length())
+            .map(|i| jtfs::Mat {
+                rows: out.coefs.rows[i] as usize,
+                cols: out.coefs.cols[i] as usize,
+                data: out.coefs.block(i).to_vec(),
+            })
+            .collect();
+        let s1 = jtfs::Mat {
+            rows: out.s1.length(),
+            cols: out.s1.cols.first().copied().unwrap_or(0) as usize,
+            data: out.s1.data.clone(),
+        };
+        self.op.renorm(&mut mats, &s1, eps).map_err(js_err)?;
+        Ok(mats_to_coefs(mats))
+    }
+}
+
+fn mats_to_coefs(mats: Vec<jtfs::Mat>) -> Coefficients {
+    Coefficients::from_blocks(mats.into_iter().map(|m| (m.rows, m.cols, m.data)))
+}
+
+/// Joint coefficients together with the S1 they can be renormalised by.
+#[wasm_bindgen]
+pub struct JtfsOutput {
+    coefs: Coefficients,
+    s1: Coefficients,
+}
+
+#[wasm_bindgen]
+impl JtfsOutput {
+    /// The joint scattering coefficients, as `transform` returns them.
+    #[wasm_bindgen(getter)]
+    pub fn coefs(&self) -> Coefficients {
+        self.coefs.clone()
+    }
+
+    /// First-order time scattering coefficients, one block per band.
+    #[wasm_bindgen(getter)]
+    pub fn s1(&self) -> Coefficients {
+        self.s1.clone()
     }
 }
 

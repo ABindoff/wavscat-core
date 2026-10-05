@@ -25,3 +25,5 @@ jtfs-F0-4096-J6	shape	5701466f0237c468
 jtfs-F0-4096-J6	coefs	cd58997ef232408f
 jtfs-speech-16000-J10	shape	ee0735a1b3ac3f89
 jtfs-speech-16000-J10	coefs	f1044cea985d1b29
+jtfs-video-900-J7	s1	9b44655e677a0dfb
+jtfs-video-900-J7	renorm	e740f29d37410ab6

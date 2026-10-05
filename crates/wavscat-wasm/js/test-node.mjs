@@ -52,6 +52,35 @@ test("joint scattering: both formats", () => {
   assert.ok(Array.from(Sj.rows).some((r) => r > 1));
 });
 
+test("joint renormalisation removes amplitude", () => {
+  const op = new w.ScatteringJtfs({ n, J: 7, J_fr: 3, Q: [8, 1], T_sec: 6, sr });
+  const paths = op.paths();
+  const renormed = (scale) => op.renorm(op.transformWithS1(x.map((v) => v * scale)), 1e-300);
+  const a = renormed(1);
+  const b = renormed(250);
+  // S1 has one block per first-order band, on the same time axis as the paths.
+  const out = op.transformWithS1(x);
+  const time = new w.Scattering1d({ n, J: 7, Q: [8, 1], T_sec: 6, sr });
+  const s1Paths = time.paths().map((p, i) => [p, i]).filter(([p]) => p.order === 1);
+  assert.equal(out.s1.length, s1Paths.length);
+  // And bit-identical to time scattering's own first order.
+  const S = time.transform(x);
+  s1Paths.forEach(([, i], b) => assert.deepEqual(Array.from(out.s1.path(b)), Array.from(S.path(i))));
+  assert.ok(Array.from(out.s1.cols).every((c) => c === out.coefs.cols[0]));
+  paths.forEach((p, i) => {
+    if (p.order !== 2) return;
+    const [u, v] = [a.path(i), b.path(i)];
+    u.forEach((ui, k) => assert.ok(Math.abs(ui - v[k]) <= 1e-9 * Math.abs(ui), `${p.path}`));
+  });
+  assert.throws(
+    () => {
+      const g = new w.ScatteringJtfs({ n, J: 7, J_fr: 3, T: "global" });
+      g.renorm(g.transformWithS1(x), 1e-12);
+    },
+    /local time averaging/,
+  );
+});
+
 test("feature helpers", () => {
   const v = Float64Array.from([3, 1, 4, 1, 5, 9]);
   assert.equal(w.summarise(v, "max"), 9);

@@ -128,6 +128,17 @@ pub fn golden_report() -> String {
         let values = coefs.iter().flat_map(|m| m.data.iter().copied());
         writeln!(out, "{name}\tcoefs\t{:016x}", hash(values)).unwrap();
     }
+
+    // The video tapping configuration, renormalised by S1: 30 s at 30 Hz.
+    let mut video = ParamsJtfs::new(900, 7, vec![8, 1]);
+    video.time.t_sec = Some(6.0);
+    video.time.sr = Some(30.0);
+    let op = ScatteringJtfs::new(&video).expect("golden operator");
+    let (mut coefs, s1) = op.transform_with_s1(&signal(900, 15)).expect("golden transform");
+    writeln!(out, "jtfs-video-900-J7\ts1\t{:016x}", hash(s1.data.iter().copied())).unwrap();
+    op.renorm(&mut coefs, &s1, 1e-12).expect("golden renorm");
+    let values = coefs.iter().flat_map(|m| m.data.iter().copied());
+    writeln!(out, "jtfs-video-900-J7\trenorm\t{:016x}", hash(values)).unwrap();
     out
 }
 

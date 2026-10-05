@@ -401,7 +401,7 @@ impl ScatteringJtfs {
             psis_fr,
             paths: Vec::new(),
         };
-        let structure = op.run(None)?;
+        let (structure, _) = op.run(None)?;
         op.paths = structure.iter().map(|(_, m)| op.describe(m)).collect();
         Ok(op)
     }
@@ -412,6 +412,15 @@ impl ScatteringJtfs {
     /// Time-format paths are single rows; joint-format paths are
     /// `[band, time]`. With global time averaging each has one column.
     pub fn transform(&self, x: &[f64]) -> Result<Vec<Mat>, Error> {
+        Ok(self.transform_with_s1(x)?.0)
+    }
+
+    /// [`transform`](Self::transform), also returning the first-order time
+    /// scattering coefficients S1 that the cascade computes on the way: one row
+    /// per first-order band, trimmed to the signal like the paths. They are
+    /// bit-identical to the order-one output of the matching
+    /// [`Scattering1d`], and are what [`renorm`](Self::renorm) divides by.
+    pub fn transform_with_s1(&self, x: &[f64]) -> Result<(Vec<Mat>, Mat), Error> {
         if x.len() != self.time.n {
             return fail(format!(
                 "The operator was built for signals of length {}, got {}.",
@@ -422,15 +431,170 @@ impl ScatteringJtfs {
         if x.iter().any(|v| !v.is_finite()) {
             return fail("The signal contains missing or non-finite values.");
         }
-        let paths = self.run(Some(x))?;
-        paths
+        let (paths, s1) = self.run(Some(x))?;
+        let coefs = paths
             .into_iter()
-            .map(|(coef, meta)| Ok(self.unpad(coef.expect("computed"), &meta)))
-            .collect()
+            .map(|(coef, meta)| self.unpad(coef.expect("computed"), &meta))
+            .collect();
+        let s1 = s1.expect("computed");
+        let s1 = match self.time.average {
+            Averaging::Local => {
+                let res = self.time.log2_stride.max(0) as usize;
+                s1.keep_cols(self.time.borders.start[res], self.time.borders.end[res])
+            }
+            _ => s1,
+        };
+        Ok((coefs, s1))
+    }
+
+    /// Divide every second-order path by the first-order energy it rides on,
+    /// plus `eps`, in place. This removes overall amplitude, such as camera
+    /// distance or hand size, leaving relative modulation.
+    ///
+    /// The denominator of a path is S1 for the bands it spans, passed through
+    /// that path's own low-pass along frequency, without its wavelet, and laid
+    /// out as its rows are:
+    ///
+    /// - spun paths with local `F`: the frequential low-pass of support `F`,
+    ///   subsampled to the same band grid;
+    /// - unspun paths: the `2^J_fr` low-pass that produced them;
+    /// - `F = 0`: S1 of the path's own band;
+    /// - `F = "global"`: S1 summed over the path's bands.
+    ///
+    /// Numerator and denominator then summarise the same bands in the same
+    /// way. Only local time averaging is supported, since otherwise the two
+    /// sit at different time resolutions.
+    pub fn renorm(&self, coefs: &mut [Mat], s1: &Mat, eps: f64) -> Result<(), Error> {
+        if self.time.average != Averaging::Local {
+            return fail(
+                "Joint renormalisation needs local time averaging. For one value per path, use a \
+                 local T and summarise the time axis afterwards.",
+            );
+        }
+        if coefs.len() != self.paths.len() {
+            return fail("coefs must have one entry per path.");
+        }
+        if s1.rows != self.time.psi1.len() {
+            return fail("s1 must have one row per first-order band.");
+        }
+        let mut cache: std::collections::HashMap<(usize, usize), Mat> = Default::default();
+        for (path, coef) in self.paths.iter().zip(coefs.iter_mut()) {
+            if path.order != 2 {
+                continue;
+            }
+            let (n2, n_fr) = (path.n2.unwrap(), path.n_fr.unwrap());
+            if !cache.contains_key(&(n2, n_fr)) {
+                let d = self.renorm_denominator(s1, n2, n_fr)?;
+                cache.insert((n2, n_fr), d);
+            }
+            let d = &cache[&(n2, n_fr)];
+            if d.cols != coef.cols {
+                return fail("A path and its denominator differ in length.");
+            }
+            match self.format {
+                Format::Time => {
+                    // This row summarises the group of bands starting at n1.
+                    let n1_index = self.n1_index(n2);
+                    let s = n1_index.iter().position(|&b| Some(b) == path.n1).unwrap();
+                    let stride =
+                        self.n1_stride(path.j_fr.unwrap(), path.spin.unwrap(), n1_index.len());
+                    let row = d.row(s / stride);
+                    for (c, v) in coef.data.iter_mut().zip(row) {
+                        *c /= *v + eps;
+                    }
+                }
+                Format::Joint => {
+                    if d.rows < coef.rows {
+                        return fail("A path has more rows than its denominator.");
+                    }
+                    for r in 0..coef.rows {
+                        let row = d.row(r);
+                        let out = &mut coef.data[r * coef.cols..(r + 1) * coef.cols];
+                        for (c, v) in out.iter_mut().zip(row) {
+                            *c /= *v + eps;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The first-order bands below second-order wavelet `n2`, one-based.
+    fn n1_index(&self, n2: usize) -> Vec<usize> {
+        let j2 = self.time.psi2[n2 - 1].j;
+        (1..=self.time.psi1.len()).filter(|&i| self.time.psi1[i - 1].j < j2).collect()
+    }
+
+    /// How many input bands each output row of a path summarises, as set in
+    /// `finalise`.
+    fn n1_stride(&self, j_fr: i32, spin: i8, n1_max: usize) -> usize {
+        match (spin != 0, self.average_fr) {
+            (true, Averaging::Global) => n1_max,
+            (true, Averaging::Local) => factor(self.log2_stride_fr),
+            _ => factor(j_fr.max(0)),
+        }
+    }
+
+    /// S1 of the bands under `n2`, through the frequential low-pass of path
+    /// `(n2, n_fr)`, as a `[band row, time]` matrix.
+    fn renorm_denominator(&self, s1: &Mat, n2: usize, n_fr: usize) -> Result<Mat, Error> {
+        let bands = self.n1_index(n2);
+        let cols = s1.cols;
+        let psi = &self.psis_fr[n_fr - 1];
+        let spun = psi.xi != 0.0;
+        let local_fr = self.average_fr == Averaging::Local;
+
+        if spun && self.average_fr == Averaging::Global {
+            let sums = (0..cols)
+                .map(|c| {
+                    let mut acc = 0.0;
+                    for &b in &bands {
+                        acc += s1.data[(b - 1) * cols + c];
+                    }
+                    acc
+                })
+                .collect();
+            return Ok(Mat::row_vec(sums));
+        }
+        if spun && self.average_fr == Averaging::None {
+            // No averaging along frequency: each row is its own band.
+            let step = factor(psi.j.max(0));
+            let rows = (0..bands.len())
+                .step_by(step)
+                .map(|s| s1.row(bands[s] - 1).to_vec())
+                .collect();
+            return Mat::from_rows(rows);
+        }
+
+        let (low_pass, k) = if spun {
+            (level(&self.phi_fr, 0)?, factor(self.log2_stride_fr))
+        } else {
+            let k_fr = if local_fr { psi.j.min(self.log2_stride_fr) } else { psi.j };
+            (level(psi, 0)?, factor(k_fr))
+        };
+        let n_pad = self.n_padded_fr;
+        let mut data = vec![C64::ZERO; n_pad * cols];
+        for (r, &b) in bands.iter().enumerate() {
+            for (d, v) in data[r * cols..(r + 1) * cols].iter_mut().zip(s1.row(b - 1)) {
+                *d = C64::new(*v, 0.0);
+            }
+        }
+        fft::fft_columns(&mut data, cols);
+        let mut y = filter_periodize_rows(&data, cols, low_pass, k);
+        fft::ifft_columns(&mut y, cols);
+        Ok(Mat {
+            rows: n_pad / k,
+            cols,
+            data: y.iter().map(|v| v.re).collect(),
+        })
     }
 
     /// The cascade, with or without data, sorted into output order.
-    fn run(&self, x: Option<&[f64]>) -> Result<Vec<(Option<Mat>, Meta)>, Error> {
+    /// Also returns the first-order time-scattering coefficients S1, one row per
+    /// band, still padded, when a signal is given.
+    #[allow(clippy::type_complexity)]
+    fn run(&self, x: Option<&[f64]>) -> Result<(Vec<(Option<Mat>, Meta)>, Option<Mat>), Error> {
         let op = &self.time;
         let local = op.average == Averaging::Local;
         let stride = op.log2_stride;
@@ -480,6 +644,7 @@ impl ScatteringJtfs {
             n1_index: (1..=op.psi1.len()).collect(),
             ..Meta::zeroth()
         };
+        let s1_out = s1.clone();
         let mut joint = self.freq_scatter(s1.map(FreqInput::Real), &base1, false)?;
 
         for (i2, f2) in op.psi2.iter().enumerate() {
@@ -536,7 +701,7 @@ impl ScatteringJtfs {
         out.extend(joint);
         // Stable, as R's order() is: by path length, then by filter indices.
         out.sort_by(|a, b| (a.1.n.len(), &a.1.n).cmp(&(b.1.n.len(), &b.1.n)));
-        Ok(out)
+        Ok((out, s1_out))
     }
 
     /// Convolve along log-frequency with every frequential filter, finishing

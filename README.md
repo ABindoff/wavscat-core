@@ -79,7 +79,8 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [x] Mixed-radix FFT with paired prime DFTs, and batched column transforms
       for the frequential axis
 - [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
-- [ ] JTFS S2/S1 renormalisation (by the time-scattering S1 of band n1)
+- [x] JTFS renormalisation: each second-order path divided by S1 of the bands
+      it spans, through the same frequential low-pass
 - [ ] Video tapping pipeline, as a separate crate
 - [ ] R binding through extendr; Python binding through PyO3
 
