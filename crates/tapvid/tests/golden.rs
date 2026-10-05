@@ -8,6 +8,7 @@
 
 use std::fmt::Write as _;
 
+use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
 use tapvid::select::{periodicity, BandParams};
 use tapvid::spectrum::{welch, WelchParams};
@@ -27,6 +28,31 @@ fn report() -> String {
     let mut g = SplitMix64::new(0x7a9);
     let draws: Vec<f64> = (0..10_000).map(|_| g.normal()).collect();
     writeln!(out, "rng\tnormal\t{:016x}", hash(draws)).unwrap();
+
+    // Ingest: luma and RGBA frames of several sizes, padded strides and an
+    // irregular clock with a gap, through the ring and its QC.
+    let mut ing = Ingest::new(IngestParams { capacity: 16, ..IngestParams::default() }).unwrap();
+    let mut t = 0i64;
+    for i in 0..24usize {
+        let (w, h, pad) = [(640, 480, 0), (1280, 720, 16), (100, 75, 3)][i % 3];
+        let stride = w + pad;
+        t += if i == 10 { 120_000 } else { 33_000 + (i as i64 * 977) % 2_000 };
+        if i % 4 == 3 {
+            let rgba: Vec<u8> = (0..4 * stride * h).map(|k| ((k * 31 + i * 7) % 256) as u8).collect();
+            ing.push_rgba(&rgba, 4 * stride, w, h, t).unwrap();
+        } else {
+            let luma: Vec<u8> = (0..stride * h).map(|k| ((k * 13 + i * 11) % 256) as u8).collect();
+            ing.push_frame(&luma, stride, w, h, t).unwrap();
+        }
+    }
+    let ring: Vec<f64> = (0..ing.len()).flat_map(|f| ing.frame(f).iter().map(|&v| v as f64).collect::<Vec<_>>()).collect();
+    writeln!(out, "ingest\tframes\t{:016x}", hash(ring)).unwrap();
+    let qc = ing.qc();
+    let qc_fields = [
+        qc.frames_accepted as f64, qc.frames_rejected as f64, qc.frames_dropped as f64,
+        qc.effective_fps, qc.longest_gap,
+    ];
+    writeln!(out, "ingest\tqc\t{:016x}", hash(qc_fields)).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.

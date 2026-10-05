@@ -81,13 +81,19 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
 - [x] JTFS renormalisation: each second-order path divided by S1 of the bands
       it spans, through the same frequential low-pass
-- [ ] Video tapping pipeline (`crates/tapvid`): done are the PRNG, synthetic
-      ground truth, stage 3 randomized SVD (sign-fixed, seeded, f32 frames with
-      f64 accumulation), stage 4 resampling, stage 5 component selection and f0 (with
-      phase-locking to detect a dominant second harmonic) and stage 6 inter-tap
-      intervals; to do
-      are ingest, preprocessing, JTFS
-      features, QC and the synthetic video generator
+- [ ] Video tapping pipeline (`crates/tapvid`). Done:
+  - stage 1, streaming ingest into a box-averaged 64 x 48 ring buffer; no raw
+    frame is retained and no frame allocates
+  - stage 3, randomized SVD: seeded, sign-fixed, f32 frames with f64
+    accumulation
+  - stage 4, resampling to a uniform grid on true timestamps
+  - stage 5, component selection and f0, with phase locking to detect a
+    dominant second harmonic
+  - stage 6, sub-frame inter-tap intervals from the analytic signal
+  - the PRNG and synthetic ground truth
+
+  To do: stage 2 preprocessing, JTFS features, QC, the synthetic video
+  generator, and the wasm streaming API.
 - [ ] R binding through extendr; Python binding through PyO3
 
 ## Licence

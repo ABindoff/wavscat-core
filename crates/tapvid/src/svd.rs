@@ -45,27 +45,30 @@ pub trait Operator {
     fn mul_t(&self, y: &[f64], k: usize, out: &mut [f64]);
 }
 
-/// A dense row-major matrix of `f32`, rows being frames and columns pixels.
-pub struct DenseF32<'a> {
-    pub data: &'a [f32],
-    pub rows: usize,
-    pub cols: usize,
+/// A matrix of `f32` stored as rows, such as frames of pixels. Every row
+/// source is an [`Operator`], with products accumulated in `f64` in a fixed
+/// order: by row, then by column, with the thin matrix's column innermost.
+pub trait RowSource {
+    fn n_rows(&self) -> usize;
+    fn n_cols(&self) -> usize;
+    /// Row `r`, of length `n_cols()`.
+    fn row(&self, r: usize) -> &[f32];
 }
 
-impl Operator for DenseF32<'_> {
+impl<T: RowSource> Operator for T {
     fn rows(&self) -> usize {
-        self.rows
+        self.n_rows()
     }
 
     fn cols(&self) -> usize {
-        self.cols
+        self.n_cols()
     }
 
     fn mul(&self, x: &[f64], k: usize, out: &mut [f64]) {
-        for r in 0..self.rows {
+        for r in 0..self.n_rows() {
             let acc = &mut out[r * k..(r + 1) * k];
             acc.fill(0.0);
-            for (c, &a) in self.data[r * self.cols..(r + 1) * self.cols].iter().enumerate() {
+            for (c, &a) in self.row(r).iter().enumerate() {
                 let a = a as f64;
                 for (o, xv) in acc.iter_mut().zip(&x[c * k..(c + 1) * k]) {
                     *o += a * xv;
@@ -76,15 +79,36 @@ impl Operator for DenseF32<'_> {
 
     fn mul_t(&self, y: &[f64], k: usize, out: &mut [f64]) {
         out.fill(0.0);
-        for r in 0..self.rows {
+        for r in 0..self.n_rows() {
             let yr = &y[r * k..(r + 1) * k];
-            for (c, &a) in self.data[r * self.cols..(r + 1) * self.cols].iter().enumerate() {
+            for (c, &a) in self.row(r).iter().enumerate() {
                 let a = a as f64;
                 for (o, yv) in out[c * k..(c + 1) * k].iter_mut().zip(yr) {
                     *o += a * yv;
                 }
             }
         }
+    }
+}
+
+/// A dense row-major matrix of `f32`, rows being frames and columns pixels.
+pub struct DenseF32<'a> {
+    pub data: &'a [f32],
+    pub rows: usize,
+    pub cols: usize,
+}
+
+impl RowSource for DenseF32<'_> {
+    fn n_rows(&self) -> usize {
+        self.rows
+    }
+
+    fn n_cols(&self) -> usize {
+        self.cols
+    }
+
+    fn row(&self, r: usize) -> &[f32] {
+        &self.data[r * self.cols..(r + 1) * self.cols]
     }
 }
 

@@ -13,6 +13,7 @@
 //!
 //! Stages, as numbered in the design brief:
 //!
+//! - 1: [`ingest`], streaming frames into a ring buffer of small grids
 //! - 3: [`svd`], the leading temporal components, by randomized SVD
 //! - 4: [`resample`], irregular capture times to a uniform grid
 //! - 5: [`select`], the tapping component and its fundamental, from a
@@ -22,6 +23,7 @@
 //! [`synth`] generates recordings with known ground truth for testing.
 #![forbid(unsafe_code)]
 
+pub mod ingest;
 pub mod linalg;
 pub mod phase;
 pub mod resample;
