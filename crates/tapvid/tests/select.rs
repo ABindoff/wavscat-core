@@ -191,3 +191,24 @@ fn the_locking_needed_reflects_how_many_cycles_were_seen() {
     assert!(locking_threshold(&b, 300, FS, 2.0, 4, 24) > short);
     assert!(short > b.half_min_locking && short < 1.0, "{short}");
 }
+
+#[test]
+fn slow_motion_cannot_vouch_for_half_the_tapping_rate() {
+    // Real webcam tapping at 5.2 Hz was halved by a component whose own
+    // rhythm was slow arm motion near 0.9 Hz, but which carried a small bump
+    // near 2.6 Hz that locked to the tapping. Only a component whose own
+    // dominant rhythm is the subharmonic may vouch for it.
+    for seed in 1..=5 {
+        let (tap, sub) = with_subharmonic(5.0, 2.0, 0.15, 10.0, seed);
+        let mut rng = SplitMix64::new(seed + 50);
+        let slow: Vec<f64> = sub
+            .iter()
+            .enumerate()
+            .map(|(i, s)| math::cos(2.0 * PI * 0.9 * i as f64 / FS) + s + 0.05 * rng.normal())
+            .collect();
+        let s = select(&[tap, slow], FS, &WelchParams::default(), &BandParams::default()).unwrap();
+        let tapping = s.ranking.iter().find(|(i, _)| *i == 0).unwrap();
+        assert!((tapping.1.f0_hz - 5.0).abs() < 0.25, "seed {seed}: {:?}", s.ranking);
+        assert_eq!(tapping.1.harmonic, 1, "seed {seed}");
+    }
+}

@@ -364,6 +364,8 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
     let prominent = |psd: &Psd, fc: f64| prominent(psd, fc, b.half_tolerance);
     // Each step tries m = 2, 3, 4 in every component.
     let tests = 3 * components.len();
+    // Each component's own dominant rhythm, over the whole spectrum.
+    let dominant: Vec<f64> = psds.iter().map(|psd| refine(psd, argmax(&psd.power, 1..=psd.power.len() - 1))).collect();
     let n = components[0].len();
     for (i, per) in ranking.iter_mut() {
         // Walk down the harmonic chain from the dominant peak: at each step
@@ -402,6 +404,15 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
                     // single-component test applies.
                     let floor = if j == source { b.half_min_ratio } else { b.walk_min_ratio };
                     if window_power(&psds[j], target) / at_f < floor || !prominent(&psds[j], target) {
+                        continue;
+                    }
+                    // Another component vouches for the subharmonic only if
+                    // the subharmonic is its own dominant rhythm, as when the
+                    // SVD gives the fundamental a component of its own, or a
+                    // sway's main component. A component whose rhythm is
+                    // elsewhere (slow arm motion at 0.9 Hz, say, whose third
+                    // harmonic sits near half a 5 Hz tapping rate) does not.
+                    if j != source && (dominant[j] - target).abs() > b.half_tolerance * target {
                         continue;
                     }
                     let lock = cross_locking(x, &components[source], fs, f, m, b.locking_bandwidth);
