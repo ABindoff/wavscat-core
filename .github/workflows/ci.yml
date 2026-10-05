@@ -125,6 +125,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # bash everywhere: in Windows PowerShell, `R` is an alias for Invoke-History.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: The R package's copies of the crates match crates/
