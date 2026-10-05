@@ -54,7 +54,10 @@ export_one <- function(path, dst) {
   }
 
   walk(obj, "")
-  writeLines(rows, file.path(dst, paste0(stem, ".tsv")), useBytes = TRUE)
+  # A binary connection, so that Windows does not write CRLF line endings.
+  tsv <- file(file.path(dst, paste0(stem, ".tsv")), "wb")
+  writeLines(rows, tsv, sep = "\n", useBytes = TRUE)
+  close(tsv)
   cat(sprintf("%s: %d leaves, %d values\n", stem, length(rows), offset))
 }
 

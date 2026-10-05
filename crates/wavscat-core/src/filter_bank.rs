@@ -61,14 +61,18 @@ pub enum Generator {
 
 /// `numpy.fft.fftfreq(n)`.
 pub fn fftfreq(n: usize) -> Vec<f64> {
+    (0..n).map(|i| fftfreq_at(n, i)).collect()
+}
+
+/// Element `i` of `fftfreq(n)`: `i / n` up to `(n - 1) / 2`, then wrapping
+/// to the negative frequencies `-(n - i) / n`.
+fn fftfreq_at(n: usize, i: usize) -> f64 {
     let nf = n as f64;
-    let half = (n - 1) / 2;
-    let mut out: Vec<f64> = (0..=half).map(|k| k as f64 / nf).collect();
-    if n > 1 {
-        let neg = n / 2;
-        out.extend((1..=neg).rev().map(|k| -(k as f64) / nf));
+    if i <= (n - 1) / 2 {
+        i as f64 / nf
+    } else {
+        -((n - i) as f64) / nf
     }
-    out
 }
 
 /// Number of periods needed to build a Morlet without a wrap discontinuity.
@@ -83,26 +87,32 @@ pub fn morlet_1d(n: usize, xi: Option<f64>, sigma: f64) -> Vec<f64> {
     let nf = n as f64;
     let two_sigma_sq = 2.0 * (sigma * sigma);
 
-    // Frequencies spanning 2P - 1 periods, consecutive blocks of length n.
+    // Frequencies spanning 2P - 1 periods: grid point t is (lo + t) / n, so
+    // consecutive blocks of length n are successive periods. With a single
+    // period the low-pass is centred on [-0.5, 0.5) to stay continuous across
+    // the wrap point; the band-pass is centred on xi and does not need it.
     let lo = (1 - p as i64) * n as i64;
-    let hi = p as i64 * n as i64;
-    let freqs: Vec<f64> = (lo..hi).map(|i| i as f64 / nf).collect();
-    let freqs_low = if p == 1 { fftfreq(n) } else { freqs.clone() };
+    let blocks = 2 * p - 1;
+    let freq = |t: usize| (lo + t as i64) as f64 / nf;
 
-    let low_pass_f = fold_periods(
-        &freqs_low.iter().map(|&f| math::exp(-(f * f) / two_sigma_sq)).collect::<Vec<_>>(),
-        n,
-    );
+    let low_pass_f = if p == 1 {
+        fold_periods(n, 1, |t| {
+            let f = fftfreq_at(n, t);
+            math::exp(-(f * f) / two_sigma_sq)
+        })
+    } else {
+        fold_periods(n, blocks, |t| {
+            let f = freq(t);
+            math::exp(-(f * f) / two_sigma_sq)
+        })
+    };
 
     let filter_f = match xi {
         Some(xi) if xi != 0.0 => {
-            let gabor_f = fold_periods(
-                &freqs
-                    .iter()
-                    .map(|&f| math::exp(-((f - xi) * (f - xi)) / two_sigma_sq))
-                    .collect::<Vec<_>>(),
-                n,
-            );
+            let gabor_f = fold_periods(n, blocks, |t| {
+                let f = freq(t);
+                math::exp(-((f - xi) * (f - xi)) / two_sigma_sq)
+            });
             // Subtracting this multiple of the low-pass forces a zero mean.
             let kappa = gabor_f[0] / low_pass_f[0];
             gabor_f.iter().zip(&low_pass_f).map(|(g, l)| g - kappa * l).collect()
@@ -114,15 +124,16 @@ pub fn morlet_1d(n: usize, xi: Option<f64>, sigma: f64) -> Vec<f64> {
     filter_f.iter().map(|v| v / l1).collect()
 }
 
-/// Average a vector over successive blocks of length `n`.
-fn fold_periods(v: &[f64], n: usize) -> Vec<f64> {
-    let blocks = v.len() / n;
+/// Evaluate `g` on a grid of `blocks * n` points and average over the blocks,
+/// since discretising in time is periodisation in frequency. Evaluating on the
+/// fly avoids materialising a grid of up to nine times the signal length.
+fn fold_periods(n: usize, blocks: usize, g: impl Fn(usize) -> f64) -> Vec<f64> {
     let bf = blocks as f64;
     (0..n)
         .map(|i| {
             let mut acc = 0.0;
             for b in 0..blocks {
-                acc += v[b * n + i];
+                acc += g(b * n + i);
             }
             acc / bf
         })
@@ -286,5 +297,65 @@ mod tests {
         assert_eq!(fftfreq(4), vec![0.0, 0.25, -0.5, -0.25]);
         assert_eq!(fftfreq(5), vec![0.0, 0.2, 0.4, -0.4, -0.2]);
         assert_eq!(fftfreq(1), vec![0.0]);
+    }
+}
+
+#[cfg(test)]
+mod reference {
+    use super::*;
+
+    /// `morlet_1d` as first written: materialise the grid, then fold it.
+    fn morlet_materialised(n: usize, xi: Option<f64>, sigma: f64) -> Vec<f64> {
+        let p = adaptive_choice_p(sigma, 1e-7).min(5);
+        let nf = n as f64;
+        let two_sigma_sq = 2.0 * (sigma * sigma);
+        let lo = (1 - p as i64) * n as i64;
+        let hi = p as i64 * n as i64;
+        let freqs: Vec<f64> = (lo..hi).map(|i| i as f64 / nf).collect();
+        let freqs_low = if p == 1 { fftfreq(n) } else { freqs.clone() };
+        let fold = |v: Vec<f64>| -> Vec<f64> {
+            let blocks = v.len() / n;
+            (0..n)
+                .map(|i| {
+                    let mut acc = 0.0;
+                    for b in 0..blocks {
+                        acc += v[b * n + i];
+                    }
+                    acc / blocks as f64
+                })
+                .collect()
+        };
+        let low = fold(freqs_low.iter().map(|&f| math::exp(-(f * f) / two_sigma_sq)).collect());
+        let filt: Vec<f64> = match xi {
+            Some(xi) if xi != 0.0 => {
+                let g = fold(freqs.iter().map(|&f| math::exp(-((f - xi) * (f - xi)) / two_sigma_sq)).collect());
+                let kappa = g[0] / low[0];
+                g.iter().zip(&low).map(|(g, l)| g - kappa * l).collect()
+            }
+            _ => low,
+        };
+        let l1 = backend::sum(&backend::modulus(&fft::ifft_real(&filt)));
+        filt.iter().map(|v| v / l1).collect()
+    }
+
+    #[test]
+    fn on_the_fly_folding_is_bit_identical() {
+        // Single-period and multi-period cases, odd and even lengths.
+        for &(n, xi, sigma) in &[
+            (256, Some(0.4), 0.0208),
+            (512, Some(0.35), 0.15),
+            (1024, Some(0.01), 0.0005),
+            (128, Some(0.3), 0.25),
+            (255, Some(-0.2), 0.05),
+            (256, None, 0.0125),
+            (1023, None, 0.3),
+        ] {
+            let got = morlet_1d(n, xi, sigma);
+            let want = morlet_materialised(n, xi, sigma);
+            assert!(
+                got.iter().zip(&want).all(|(g, w)| g.to_bits() == w.to_bits()),
+                "n = {n}, xi = {xi:?}, sigma = {sigma}"
+            );
+        }
     }
 }

@@ -14,7 +14,7 @@ computed on a server.
 | Source of drift | Rule |
 |---|---|
 | Platform libm (`exp`, `cos`, `log`) differs in the last bit | All transcendental functions come from the pure-Rust `libm` crate, pinned exactly, with `arch` off. `clippy.toml` bans the `std` versions. |
-| FFT libraries choose SIMD kernels at run time | The FFT is our own, in scalar code: radix-2, plus Bluestein for other lengths. Twiddle angles are reduced in integers. |
+| FFT libraries choose SIMD kernels at run time | The FFT is our own, in scalar code: textbook radix-2 decimation in time, run in a cache-blocked order that tests prove bit-identical to the textbook order, with Bluestein for other lengths. Real signals go through a half-length complex FFT. Twiddle angles are reduced in integers. |
 | Fused multiply-add, fast-math | Rust never contracts or reassociates floating-point operations by default. Shipped builds use no `target-cpu=native` and no relaxed SIMD. |
 | Parallel reductions | Every sum runs sequentially in index order. Parallelism is only ever across signals or paths. |
 
@@ -45,7 +45,8 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 
 - [x] Filter banks, padding, 1D scattering (orders 1 and 2; local, global and
       no averaging), feature post-processing
-- [ ] Faster FFT (radix-4 or split-radix, real-input transforms) before freezing
+- [x] Faster FFT: cache-blocked radix-2, real-input transforms, fused filter-and-subsample
+- [ ] Optional before freezing: radix-4 butterflies (fewer multiplications, different rounding)
 - [ ] Joint time-frequency scattering
 - [ ] wasm-bindgen binding, and CI across targets and browsers
 - [ ] R binding through extendr; Python binding through PyO3

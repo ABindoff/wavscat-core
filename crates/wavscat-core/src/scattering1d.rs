@@ -3,7 +3,7 @@
 //! A port of `R/op-1d.R` and `R/cascade.R`. Building the operator is the
 //! expensive step; apply it to as many signals of length `n` as you like.
 
-use crate::backend::{cdgmm, modulus, periodize_mean, real, sum};
+use crate::backend::{filter_periodize, modulus, sum};
 use crate::complex::C64;
 use crate::error::{fail, Error};
 use crate::fft;
@@ -294,7 +294,7 @@ impl Scattering1d {
         let u0_hat = fft::fft_real(&u0);
 
         let s0 = if local {
-            (inverse_real(periodize_mean(&cdgmm(&u0_hat, self.phi.level(0)), 1 << stride)), stride as usize)
+            (inverse_real(filter_periodize(&u0_hat, self.phi.level(0), 1 << stride)), stride as usize)
         } else {
             (u0, 0)
         };
@@ -305,12 +305,13 @@ impl Scattering1d {
             // the output stride.
             let k1 = if local { j1.min(stride) } else { j1 };
 
-            let u1_m = modulus(&inverse(periodize_mean(&cdgmm(&u0_hat, f1.level(0)), 1 << k1)));
+            let u1_m = modulus(&inverse(filter_periodize(&u0_hat, f1.level(0), 1 << k1)));
             let u1_hat = if local || second { Some(fft::fft_real(&u1_m)) } else { None };
 
             if local {
-                let s1 = inverse_real(periodize_mean(
-                    &cdgmm(u1_hat.as_ref().unwrap(), self.phi.level(k1 as usize)),
+                let s1 = inverse_real(filter_periodize(
+                    u1_hat.as_ref().unwrap(),
+                    self.phi.level(k1 as usize),
                     1 << (stride - k1).max(0),
                 ));
                 order1.push((s1, stride as usize));
@@ -331,13 +332,15 @@ impl Scattering1d {
                 }
                 let sub2_adj = if local { j2.min(stride) } else { j2 };
                 let k2 = (sub2_adj - k1).max(0);
-                let u2_m = modulus(&inverse(periodize_mean(
-                    &cdgmm(&u1_hat, f2.level(k1 as usize)),
+                let u2_m = modulus(&inverse(filter_periodize(
+                    &u1_hat,
+                    f2.level(k1 as usize),
                     1 << k2,
                 )));
                 if local {
-                    let s2 = inverse_real(periodize_mean(
-                        &cdgmm(&fft::fft_real(&u2_m), self.phi.level((k1 + k2) as usize)),
+                    let s2 = inverse_real(filter_periodize(
+                        &fft::fft_real(&u2_m),
+                        self.phi.level((k1 + k2) as usize),
                         1 << (stride - sub2_adj).max(0),
                     ));
                     order2.push((s2, stride as usize));
@@ -369,5 +372,5 @@ fn inverse(mut x: Vec<C64>) -> Vec<C64> {
 }
 
 fn inverse_real(x: Vec<C64>) -> Vec<f64> {
-    real(&inverse(x))
+    fft::ifft_real_part(x)
 }
