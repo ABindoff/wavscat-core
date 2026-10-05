@@ -102,7 +102,11 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
     capture, lighting, interruption, weak or competing rhythm and diffuse
     motion, with every threshold a parameter
 
-  To do: JTFS features,
+  - stage 7, the feature vector: interval and amplitude features plus JTFS
+    of the unit-RMS component, renormalised and log-compressed, stamped
+    with schema, crate and numerics versions and a hash of every parameter
+
+  To do:
   and the wasm streaming API.
 - [ ] R binding through extendr; Python binding through PyO3
 

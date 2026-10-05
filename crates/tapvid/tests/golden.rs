@@ -8,6 +8,7 @@
 
 use std::fmt::Write as _;
 
+use tapvid::features::{trial_features, FeatureParams};
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
 use tapvid::pipeline::{analyse_trial, PipelineParams};
@@ -119,6 +120,10 @@ fn report() -> String {
         q.loading_spread.unwrap_or(-1.0),
     ];
     writeln!(out, "video\tqc\t{:016x}", hash(qf)).unwrap();
+    let fp = FeatureParams::default();
+    let feats = trial_features(&trial, &PipelineParams::default(), &QcParams::default(), &fp).unwrap();
+    writeln!(out, "video\tfeatures\t{:016x}", hash(feats.values.iter().copied())).unwrap();
+    writeln!(out, "video\tparams_hash\t{}", feats.params_hash).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.

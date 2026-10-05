@@ -20,12 +20,14 @@
 //! - 5: [`select`], the tapping component and its fundamental, from a
 //!   [`spectrum`]
 //! - 6: [`phase`], inter-tap intervals and amplitude from the analytic signal
+//! - 7: [`features`], the named feature vector and its version stamp
 //! - 8: [`qc`], quality control and gating of whole trials
 //!
 //! [`pipeline`] runs stages 2 to 6 over a captured trial. [`synth`] and
 //! [`synth_video`] generate signals and videos with known ground truth.
 #![forbid(unsafe_code)]
 
+pub mod features;
 pub mod ingest;
 pub mod linalg;
 pub mod phase;
