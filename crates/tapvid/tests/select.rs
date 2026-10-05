@@ -93,13 +93,13 @@ fn the_tapping_component_is_selected_over_drift_noise_and_breathing() {
 }
 
 #[test]
-fn a_second_oscillator_shows_as_a_close_runner_up() {
+fn a_second_oscillator_shows_as_a_close_competitor() {
     // A distractor moving rhythmically in the tapping band, as a second
     // person or a pet might: QC should see that the choice was close.
     let tap = tapping(3.0, 1.0, 0.5, 0.2, 5);
     let other = tapping(4.5, 1.0, 0.3, 0.2, 6);
     let s = select(&[tap, other], FS, &WelchParams::default(), &BandParams::default()).unwrap();
-    let (best, runner) = (s.best().1.score, s.runner_up().unwrap().1.score);
+    let (best, runner) = (s.best().1.score, s.competitor().expect("a competing oscillator").1.score);
     assert!(runner > 0.5 * best, "runner-up {runner} vs {best}");
 }
 

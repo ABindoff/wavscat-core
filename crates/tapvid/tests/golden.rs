@@ -10,6 +10,8 @@ use std::fmt::Write as _;
 
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
+use tapvid::pipeline::{analyse_trial, PipelineParams};
+use tapvid::synth_video::{Distractor, VideoSpec, VideoSynth};
 use tapvid::preprocess::{preprocess, PreprocessParams};
 use tapvid::select::{periodicity, BandParams};
 use tapvid::spectrum::{welch, WelchParams};
@@ -77,6 +79,33 @@ fn report() -> String {
     writeln!(out, "preprocess\tgain_qc\t{:016x}", hash(gq)).unwrap();
     let svd = randomized_svd(&pre, &SvdParams::default()).unwrap();
     writeln!(out, "preprocess\tsvd_scores\t{:016x}", hash(svd.scores.iter().flatten().copied())).unwrap();
+
+    // End to end: a small synthetic video with a sway distractor, rendered
+    // at a rough clock, through ingest and the whole post-capture pipeline.
+    let vspec = VideoSpec {
+        width: 160,
+        height: 120,
+        radius: 6.0,
+        displacement: 10.0,
+        tap: TapSpec { duration: 12.0, iti_sd: 0.010, seed: 41, ..TapSpec::default() },
+        exposure_step: Some((6.0, 1.3)),
+        distractor: Some(Distractor { rate_hz: 0.4, displacement: 20.0, radius: 12.0, contrast: 80.0, centre: (0.25, 0.3) }),
+        seed: 42,
+        ..VideoSpec::default()
+    };
+    let video = VideoSynth::new(vspec.clone());
+    let vclock = FrameClock { jitter_sd: 0.004, drop_prob: 0.05, seed: 43, ..FrameClock::default() };
+    let mut ving = Ingest::new(IngestParams::default()).unwrap();
+    let (mut vframe, mut vwork) = (vec![0u8; 160 * 120], vec![0f32; 160 * 120]);
+    for &t in &frame_times(&vclock, 12.0) {
+        video.render(t, &mut vframe, &mut vwork);
+        ving.push_frame(&vframe, 160, 160, 120, (t * 1e6).round() as i64).unwrap();
+    }
+    let trial = analyse_trial(&ving, &PipelineParams::default()).unwrap();
+    writeln!(out, "video\tsignal\t{:016x}", hash(trial.signal.iter().copied())).unwrap();
+    let tf = [trial.component as f64, trial.f0_hz, trial.selection.best().1.timing_harmonic() as f64, trial.competitor_ratio];
+    writeln!(out, "video\tselection\t{:016x}", hash(tf)).unwrap();
+    writeln!(out, "video\tboundaries\t{:016x}", hash(trial.cycles.boundaries.iter().copied())).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.

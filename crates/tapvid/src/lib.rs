@@ -21,12 +21,14 @@
 //!   [`spectrum`]
 //! - 6: [`phase`], inter-tap intervals and amplitude from the analytic signal
 //!
-//! [`synth`] generates recordings with known ground truth for testing.
+//! [`pipeline`] runs stages 2 to 6 over a captured trial. [`synth`] and
+//! [`synth_video`] generate signals and videos with known ground truth.
 #![forbid(unsafe_code)]
 
 pub mod ingest;
 pub mod linalg;
 pub mod phase;
+pub mod pipeline;
 pub mod preprocess;
 pub mod resample;
 pub mod rng;
@@ -34,3 +36,4 @@ pub mod select;
 pub mod spectrum;
 pub mod svd;
 pub mod synth;
+pub mod synth_video;

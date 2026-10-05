@@ -92,10 +92,14 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
   - stage 5, component selection and f0, with phase locking to detect a
     dominant second harmonic
   - stage 6, sub-frame inter-tap intervals from the analytic signal
-  - the PRNG and synthetic ground truth
+  - cross-component harmonic analysis: a component carrying a harmonic of
+    the hand, or of slow motion such as a sway, is recognised as such
+  - `analyse_trial`, stages 2 to 6 end to end over a captured trial
+  - the PRNG, and synthetic ground truth: signals, and videos of a moving
+    blob with noise, gain drift, an exposure step and distractors
 
-  To do: JTFS features, QC, the synthetic video
-  generator, and the wasm streaming API.
+  To do: QC gating, JTFS features,
+  and the wasm streaming API.
 - [ ] R binding through extendr; Python binding through PyO3
 
 ## Licence

@@ -5,6 +5,9 @@ ingest	qc	f8dd5db8e87e7680
 preprocess	gain_trace	c65c4c077d65697c
 preprocess	gain_qc	524aa61f8e90113e
 preprocess	svd_scores	25a81ddce36cb2ad
+video	signal	3f1d233ad74825f2
+video	selection	5694e2f3034f6f40
+video	boundaries	df585805fffc41bf
 svd	singular_values	9ce3b78491c549b1
 svd	scores	a6e5ed983a4d5b89
 svd	loadings	9f46ee86a1fef0e0

@@ -91,18 +91,20 @@ pub struct Periodicity {
     pub half_ratio: f64,
     /// Phase locking of `peak_hz / 2` to `peak_hz`, from 0 to 1.
     pub half_locking: f64,
+    /// Which harmonic of `f0_hz` the dominant peak of this component is.
+    pub harmonic: u32,
+    /// Set by [`select`] when the component is a harmonic of motion below the
+    /// tapping band, such as a sway; it cannot be selected.
+    pub excluded: bool,
 }
 
 impl Periodicity {
-    /// Which harmonic of `f0` stage 6 should time cycles from: the second
-    /// when it dominates, otherwise the fundamental. Timing from a weak
-    /// fundamental fails once it is a fifth of the harmonic (see the
-    /// `harmonic_timing` example), while timing from the harmonic does not.
+    /// Which harmonic of `f0` stage 6 should time cycles from: the one that
+    /// dominates this component. Timing from a weak fundamental fails once it
+    /// is a fifth of the harmonic (see the `harmonic_timing` example), while
+    /// timing from the harmonic does not.
     pub fn timing_harmonic(&self) -> u32 {
-        match self.case {
-            F0Case::Fundamental => 1,
-            F0Case::Harmonic => 2,
-        }
+        self.harmonic
     }
 }
 
@@ -216,37 +218,179 @@ pub fn periodicity(x: &[f64], fs: f64, w: &WelchParams, b: &BandParams) -> Resul
         case,
         half_ratio,
         half_locking,
+        harmonic: if case == F0Case::Harmonic { 2 } else { 1 },
+        excluded: false,
     })
 }
 
 /// Components ranked by score, best first.
 #[derive(Debug, Clone)]
 pub struct Selection {
-    /// `(component index, periodicity)`, in descending order of score.
+    /// `(component index, periodicity)`: selectable components in descending
+    /// order of score, then excluded ones.
     pub ranking: Vec<(usize, Periodicity)>,
+    /// Frequency tolerance, as a fraction, for telling oscillators apart.
+    tolerance: f64,
 }
 
 impl Selection {
+    /// The selected component.
     pub fn best(&self) -> &(usize, Periodicity) {
         &self.ranking[0]
     }
 
+    /// The next selectable component in the ranking, whatever it is.
     pub fn runner_up(&self) -> Option<&(usize, Periodicity)> {
-        self.ranking.get(1)
+        self.ranking.get(1).filter(|(_, p)| !p.excluded)
+    }
+
+    /// The best-scoring selectable component that belongs to a different
+    /// oscillator from the selected one. A moving hand spreads over several
+    /// components that share one fundamental, so the plain runner-up is
+    /// usually the same oscillator; this is the one that signals a second
+    /// moving object.
+    ///
+    /// A component whose frequency is within the tolerance of 1, 2, 3 or 4
+    /// times the selected fundamental, or of a half, third or quarter of it,
+    /// counts as the same oscillator: a harmonic whose link to the
+    /// fundamental was too weak to confirm in its own component.
+    pub fn competitor(&self) -> Option<&(usize, Periodicity)> {
+        let f0 = self.best().1.f0_hz;
+        let related = |f: f64| {
+            let r = if f >= f0 { f / f0 } else { f0 / f };
+            let k = r.round();
+            (1.0..=4.0).contains(&k) && (r - k).abs() <= self.tolerance * k
+        };
+        self.ranking[1..].iter().filter(|(_, p)| !p.excluded).find(|(_, p)| !related(p.f0_hz))
     }
 }
 
-/// Score every component, each a uniformly sampled series at `fs` Hz, and
-/// rank them. Ties keep the original order.
+/// Phase locking of the band of `low` around `f / m` to the band of `high`
+/// around `f`: `|sum z_low^m conj(z_high)| / sum |z_low|^m |z_high|`, near 1
+/// when `f` is the `m`-th harmonic of the oscillation at `f / m`.
+fn cross_locking(low: &[f64], high: &[f64], fs: f64, f: f64, m: u32, bandwidth: f64) -> f64 {
+    let fl = f / m as f64;
+    let z1 = analytic_band(low, fs, fl, bandwidth * fl, 3.0);
+    let z2 = analytic_band(high, fs, f, bandwidth * f, 3.0);
+    let (mut re, mut im, mut norm) = (0.0f64, 0.0f64, 0.0f64);
+    for (a, b) in z1.iter().zip(&z2) {
+        let mut zp = *a;
+        for _ in 1..m {
+            zp = zp * *a;
+        }
+        let c = zp * b.conj();
+        re += c.re;
+        im += c.im;
+        norm += c.norm();
+    }
+    if norm > 0.0 { (re * re + im * im).sqrt() / norm } else { 0.0 }
+}
+
+/// Score every component, each a uniformly sampled series at `fs` Hz, find
+/// the oscillator each belongs to, and rank them.
+///
+/// The SVD spreads one moving object over several components, and one
+/// component can carry a single harmonic of the motion: a hand tapping at
+/// 3 Hz can leave a pure 6 Hz component, and a body swaying at 0.4 Hz a pure
+/// 1.2 Hz one, sharper than any tapping peak. So the dominant peak `f` of
+/// each component is tested against subharmonics `f / m`, `m = 4, 3, 2`, in
+/// every component: one with real power that is phase-locked to `f` makes
+/// `f` its `m`-th harmonic. If that fundamental lies in the band, the
+/// component is timed at harmonic `m`; if it lies below, the component is a
+/// harmonic of slow motion and is excluded from selection.
 pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams) -> Result<Selection, Error> {
     if components.is_empty() {
         return Err(Error("No components to select from.".into()));
     }
+    let psds = components.iter().map(|x| welch(x, fs, w)).collect::<Result<Vec<_>, Error>>()?;
     let mut ranking = components
         .iter()
         .enumerate()
         .map(|(i, x)| Ok((i, periodicity(x, fs, w, b)?)))
         .collect::<Result<Vec<_>, Error>>()?;
-    ranking.sort_by(|x, y| y.1.score.total_cmp(&x.1.score));
-    Ok(Selection { ranking })
+
+    let window = |psd: &Psd, fc: f64| {
+        (bin(psd, fc * (1.0 - b.half_tolerance)).max(1), bin(psd, fc * (1.0 + b.half_tolerance)))
+    };
+    let window_power = |psd: &Psd, fc: f64| {
+        let (a, z) = window(psd, fc);
+        sum(&psd.power[a..=z.max(a)])
+    };
+    // A subharmonic must be a genuine peak in its component: at least twice
+    // the mean power of its flanks. The phase-noise skirt of a strong line
+    // slopes rather than peaks, and can otherwise pass for one.
+    let prominent = |psd: &Psd, fc: f64| {
+        let flanks = 0.5 * (window_power(psd, 0.75 * fc) + window_power(psd, 1.25 * fc));
+        window_power(psd, fc) >= 2.0 * flanks
+    };
+    for (i, per) in ranking.iter_mut() {
+        // Walk down the harmonic chain from the dominant peak: at each step
+        // take the smallest m whose subharmonic is a prominent peak in some
+        // component and phase-locked to the current frequency, until none is.
+        // 12 Hz goes to 6 and then 3; a sway's 1.2 Hz goes to 0.4.
+        let mut f = per.peak_hz;
+        let mut source = *i;
+        let mut total = 1u32;
+        let mut moved = false;
+        loop {
+            let at_f = window_power(&psds[source], f);
+            if at_f <= 0.0 {
+                break;
+            }
+            let mut step: Option<(u32, usize, f64)> = None;
+            for m in 2..=4u32 {
+                let target = f / m as f64;
+                if target < 2.0 * psds[source].df() {
+                    break;
+                }
+                let mut found: Option<(usize, f64)> = None;
+                for (j, x) in components.iter().enumerate() {
+                    if window_power(&psds[j], target) / at_f < b.half_min_ratio || !prominent(&psds[j], target) {
+                        continue;
+                    }
+                    let lock = cross_locking(x, &components[source], fs, f, m, b.locking_bandwidth);
+                    let better = match found {
+                        Some((_, l)) => lock > l,
+                        None => true,
+                    };
+                    if lock >= b.half_min_locking && better {
+                        found = Some((j, lock));
+                    }
+                }
+                if let Some((j, _)) = found {
+                    let psd = &psds[j];
+                    let (a, z) = window(psd, target);
+                    step = Some((m, j, refine(psd, argmax(&psd.power, a..=z.max(a)))));
+                    break;
+                }
+            }
+            match step {
+                Some((m, j, below)) => {
+                    f = below;
+                    source = j;
+                    total *= m;
+                    moved = true;
+                }
+                None => break,
+            }
+        }
+        if moved {
+            if f < b.lo {
+                per.excluded = true;
+            } else if f <= b.hi {
+                per.f0_hz = f;
+                per.harmonic = total;
+                per.case = F0Case::Harmonic;
+            }
+        }
+    }
+
+    // Selectable components by score, then excluded ones.
+    ranking.sort_by(|x, y| x.1.excluded.cmp(&y.1.excluded).then(y.1.score.total_cmp(&x.1.score)));
+    if ranking[0].1.excluded {
+        return Err(Error(
+            "Every component is a harmonic of motion below the tapping band; no tapping found.".into(),
+        ));
+    }
+    Ok(Selection { ranking, tolerance: b.half_tolerance })
 }
