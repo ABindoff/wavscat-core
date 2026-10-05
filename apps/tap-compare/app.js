@@ -484,10 +484,12 @@ function gridMapper(gw, gh) {
   return (x, y) => ({ x: ((x * width - x0) / cwid) * gw, y: ((y * height - y0) / chei) * gh });
 }
 
-/// For each window the video located the tapping in, whether this hand's
-/// index and thumb tips (their mean position over the window) lie in the
-/// motion box, with a margin of one cell, and how far the index tip is from
-/// the box's centroid, in cells.
+/// For each window the video located the tapping in, whether the motion
+/// box's centre lies on this hand's thumb-index region (the extent of
+/// landmarks 1 to 8 over the window, with a margin of one cell), and how far
+/// it is from the nearest of those landmarks, in cells. The oscillation is
+/// strongest along the moving finger and thumb, not at the tips, so the
+/// region is the fair test.
 function locationCheck(a, samples) {
   const loc = a.locations;
   if (!loc || !samples.length) return null;
@@ -498,12 +500,13 @@ function locationCheck(a, samples) {
   for (const w of loc.windows) {
     const sel = samples.filter((_, i) => t[i] >= w.t_start && t[i] <= w.t_end);
     if (sel.length < 3) continue;
-    const at = (k) => toGrid(mean(sel.map((s) => s.h.x[k])), mean(sel.map((s) => s.h.y[k])));
-    const tips = [at(INDEX_TIP), at(THUMB_TIP)];
-    const inBox = (q) => q.x >= w.box_x0 - 1 && q.x <= w.box_x1 + 2 && q.y >= w.box_y0 - 1 && q.y <= w.box_y1 + 2;
+    const pts = sel.flatMap((s) => [1, 2, 3, 4, 5, 6, 7, 8].map((k) => toGrid(s.h.x[k], s.h.y[k])));
+    const xs = pts.map((q) => q.x), ys = pts.map((q) => q.y);
+    const on = w.centroid_x >= Math.min(...xs) - 1 && w.centroid_x <= Math.max(...xs) + 1
+      && w.centroid_y >= Math.min(...ys) - 1 && w.centroid_y <= Math.max(...ys) + 1;
     windows += 1;
-    if (tips.every(inBox)) inside += 1;
-    dist.push(Math.hypot(tips[0].x - w.centroid_x, tips[0].y - w.centroid_y));
+    if (on) inside += 1;
+    dist.push(Math.min(...pts.map((q) => Math.hypot(q.x - w.centroid_x, q.y - w.centroid_y))));
   }
   return { windows, inside, medianDistance: median(dist) };
 }
@@ -759,12 +762,12 @@ function renderResult(trial, key) {
     <h3>Agreement with each hand's landmark trace</h3>
     <div class="scroll"><table>
       <tr><th>landmark trace</th><th>hand found</th><th>f<sub>0</sub> (Hz)</th><th>waveform r</th><th>lag (ms)</th><th>taps matched</th>
-        <th>timing SD (ms)</th><th>ITI |diff| (ms)</th><th>ITI r</th><th>JTFS feature r</th><th>tips in motion box</th><th>index tip to box centre (cells)</th></tr>
+        <th>timing SD (ms)</th><th>ITI |diff| (ms)</th><th>ITI r</th><th>JTFS feature r</th><th>box on thumb–index</th><th>box to nearest finger landmark (cells)</th></tr>
       ${rows}
     </table></div>
     <p>${a?.locations ? `Motion box over ${a.locations.windows.length} windows of 2 s: travelled up to ${fmt(a.locations.travel, 1)} cells from its median position, largest jump between windows ${fmt(a.locations.max_step, 1)} cells (a cell is 1/64 of the frame width).` : `Motion box: ${a?.locate_error ?? "not computed"}.`}
       ${a?.usable ? `Usable cycles: ${a.usable.filter((u) => u).length} of ${a.usable.length}.` : ""}</p>
-    <p class="note">The trace is thumb–index aperture over hand size. Waveform r is the correlation of the video component with the trace, at the best lag within ±300 ms; the component's sign is arbitrary. Taps are cycle boundaries from each analytic signal, aligned by the waveform lag and sign, then matched within half a cycle; their phase origins differ, so a constant offset is expected and the timing SD (the spread of the offset) is what matters. ITI |diff| is the mean absolute difference between matched inter-tap intervals. The motion box is where the video found brightness oscillating at the tapping rate, in each 2 s window; "tips in motion box" counts the windows whose box holds both the hand's mean index and thumb tip positions, within a cell.</p>
+    <p class="note">The trace is thumb–index aperture over hand size. Waveform r is the correlation of the video component with the trace, at the best lag within ±300 ms; the component's sign is arbitrary. Taps are cycle boundaries from each analytic signal, aligned by the waveform lag and sign, then matched within half a cycle; their phase origins differ, so a constant offset is expected and the timing SD (the spread of the offset) is what matters. ITI |diff| is the mean absolute difference between matched inter-tap intervals. The motion box is where the video found brightness oscillating at the tapping rate, in each 2 s window; "box on thumb–index" counts the windows whose box centre lies on this hand's thumb and index finger (landmarks 1–8), within a cell.</p>
     <div class="grid2">
       <div><h3>Video loading, motion boxes, and mean landmark positions</h3><canvas class="heat" id="heat-${key}"></canvas>
         <div class="legend"><span>red/blue: the selected component's loading, by sign</span><span>outlines: motion box per window, later darker; line: its centre's path</span><span>● index tip</span><span>▲ thumb tip</span><span>■ wrist</span></div></div>
@@ -999,7 +1002,7 @@ function renderSummary() {
   $("summaryPanel").hidden = rows.length === 0;
   $("summary").innerHTML = `<tr><th>trial</th><th>fps</th><th>dropped (%)</th><th>QC</th><th>video f<sub>0</sub> (Hz)</th><th>video ITI CV</th><th>box travel (cells)</th>
     <th>landmark trace</th><th>trace f<sub>0</sub> (Hz)</th><th>waveform r</th><th>timing SD (ms)</th><th>ITI |diff| (ms)</th>
-    <th>JTFS feature r</th><th>trace ITI CV</th><th>tips in motion box</th></tr>${rows.join("")}`;
+    <th>JTFS feature r</th><th>trace ITI CV</th><th>box on thumb–index</th></tr>${rows.join("")}`;
 }
 
 function download() {
