@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
 use tapvid::pipeline::{analyse_trial, PipelineParams};
+use tapvid::qc::{run_trial, QcParams};
 use tapvid::synth_video::{Distractor, VideoSpec, VideoSynth};
 use tapvid::preprocess::{preprocess, PreprocessParams};
 use tapvid::select::{periodicity, BandParams};
@@ -106,6 +107,18 @@ fn report() -> String {
     let tf = [trial.component as f64, trial.f0_hz, trial.selection.best().1.timing_harmonic() as f64, trial.competitor_ratio];
     writeln!(out, "video\tselection\t{:016x}", hash(tf)).unwrap();
     writeln!(out, "video\tboundaries\t{:016x}", hash(trial.cycles.boundaries.iter().copied())).unwrap();
+    let gated = run_trial(&ving, &PipelineParams::default(), &QcParams::default());
+    let q = &gated.qc;
+    let qf = [
+        q.accepted() as u8 as f64,
+        q.reasons.len() as f64,
+        q.dropped_fraction,
+        q.score.unwrap_or(-1.0),
+        q.competitor_ratio.unwrap_or(-1.0),
+        q.usable_cycles.map_or(-1.0, |u| u as f64),
+        q.loading_spread.unwrap_or(-1.0),
+    ];
+    writeln!(out, "video\tqc\t{:016x}", hash(qf)).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.

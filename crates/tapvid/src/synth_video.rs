@@ -60,6 +60,11 @@ pub struct VideoSpec {
     /// this factor.
     pub exposure_step: Option<(f64, f64)>,
     pub distractor: Option<Distractor>,
+    /// The hand stops tapping at this time, in seconds, and rests.
+    pub stop_at: Option<f64>,
+    /// The whole frame shifts horizontally at this rate (Hz) by up to this
+    /// many pixels, as a shaking camera would.
+    pub camera_shake: Option<(f64, f64)>,
     pub seed: u64,
 }
 
@@ -81,6 +86,8 @@ impl Default for VideoSpec {
             gain_drift_hz: 0.05,
             exposure_step: Some((15.0, 1.3)),
             distractor: None,
+            stop_at: None,
+            camera_shake: None,
             seed: 1,
         }
     }
@@ -157,11 +164,24 @@ impl VideoSynth {
     pub fn render(&self, t: f64, out: &mut [u8], work: &mut [f32]) {
         let s = &self.spec;
         let (w, h) = (s.width, s.height);
-        work.copy_from_slice(&self.background);
+        match s.camera_shake {
+            None => work.copy_from_slice(&self.background),
+            Some((rate, px)) => {
+                // Shift the whole background by a whole number of pixels.
+                let dx = (px * math::sin(2.0 * std::f64::consts::PI * rate * t)).round() as i64;
+                for y in 0..h {
+                    for x in 0..w {
+                        let sx = (x as i64 + dx).clamp(0, w as i64 - 1) as usize;
+                        work[y * w + x] = self.background[y * w + sx];
+                    }
+                }
+            }
+        }
 
         let ph = phase_at(&self.taps, t);
         let wave = s.tap.fundamental * math::cos(ph) + s.tap.second_harmonic * math::cos(2.0 * ph + 1.0);
-        let amp = s.tap.amplitude + s.tap.amplitude_slope * t;
+        let stopped = matches!(s.stop_at, Some(at) if t >= at);
+        let amp = if stopped { 0.0 } else { s.tap.amplitude + s.tap.amplitude_slope * t };
         let cx = s.centre.0 * w as f64;
         let cy = s.centre.1 * h as f64 + s.displacement * amp * wave;
         add_blob(work, w, h, cx, cy, s.radius, s.contrast);

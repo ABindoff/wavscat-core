@@ -98,7 +98,11 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
   - the PRNG, and synthetic ground truth: signals, and videos of a moving
     blob with noise, gain drift, an exposure step and distractors
 
-  To do: QC gating, JTFS features,
+  - stage 8, QC gating: a report for every trial, rejection reasons for
+    capture, lighting, interruption, weak or competing rhythm and diffuse
+    motion, with every threshold a parameter
+
+  To do: JTFS features,
   and the wasm streaming API.
 - [ ] R binding through extendr; Python binding through PyO3
 

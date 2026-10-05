@@ -50,6 +50,14 @@ pub struct TrialResult {
     pub gain: GainQc,
     /// Singular values of the preprocessed frames.
     pub singular_values: Vec<f64>,
+    /// Participation ratio of the selected component's spatial loading: the
+    /// effective fraction of grid cells it involves, from near 0 (one cell)
+    /// to 1 (all equally). A hand is localised; a lighting change or motion
+    /// of the whole frame is not.
+    pub loading_spread: f64,
+    /// The selected component's spatial loading, only if
+    /// `svd.return_loadings` was set. It shows where the hand is.
+    pub loading: Option<Vec<f64>>,
     /// Components ranked by periodicity score.
     pub selection: Selection,
     /// Index of the selected component.
@@ -73,7 +81,10 @@ pub struct TrialResult {
 pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Error> {
     let ts = ing.timestamps();
     let (pre, gain) = preprocess(ing, &ts, &p.preprocess)?;
-    let svd = randomized_svd(&pre, &p.svd)?;
+    // Loadings are always computed for QC; they leave only if requested.
+    let mut svd_params = p.svd.clone();
+    svd_params.return_loadings = true;
+    let mut svd = randomized_svd(&pre, &svd_params)?;
 
     let mut uniform = Vec::with_capacity(svd.scores.len());
     let mut t0 = 0.0;
@@ -97,10 +108,22 @@ pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Er
     };
     let cycles = analyse_at(&uniform[component], p.fs, t0, best.f0_hz, best.timing_harmonic(), &p.phase)?;
 
+    // Loading spread: 1 / (cells * sum v^4) for a unit-norm loading.
+    let mut loadings = svd.loadings.take().expect("requested");
+    let map = loadings.swap_remove(component);
+    let mut fourth = 0.0;
+    for v in &map {
+        fourth += v * v * v * v;
+    }
+    let loading_spread = if fourth > 0.0 { 1.0 / (map.len() as f64 * fourth) } else { 0.0 };
+    let loading = if p.svd.return_loadings { Some(map) } else { None };
+
     Ok(TrialResult {
         ingest: ing.qc(),
         gain,
         singular_values: svd.singular_values,
+        loading_spread,
+        loading,
         component,
         t0,
         signal: uniform.swap_remove(component),
