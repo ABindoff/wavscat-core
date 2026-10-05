@@ -167,6 +167,10 @@ impl TappingSession {
                 Err(e) => (None, Some(e.0)),
             };
             Analysis {
+                weights: r.weights.clone(),
+                band_fraction: r.band_fraction,
+                score: r.score,
+                timing_harmonic: r.timing_harmonic,
                 frame_times: r.timestamps.clone(),
                 clock: r.clock.clone(),
                 usable: usable_mask(&r.cycles.itis, &r.cycles.amplitudes, self.qc.usable_iti_factor, self.qc.usable_min_amplitude),
@@ -188,6 +192,7 @@ impl TappingSession {
                     .map(|(i, p)| Ranked {
                         component: *i,
                         score: p.score,
+                        strength: p.strength,
                         peak_hz: p.peak_hz,
                         f0_hz: p.f0_hz,
                         harmonic: p.timing_harmonic(),
@@ -323,6 +328,7 @@ struct Named {
 struct Ranked {
     component: usize,
     score: f64,
+    strength: f64,
     peak_hz: f64,
     f0_hz: f64,
     harmonic: u32,
@@ -331,6 +337,13 @@ struct Ranked {
 
 #[derive(Serialize)]
 struct Analysis {
+    /// The tapping signal is every component weighted by its power in the
+    /// tapping band: the weights, its share of power in the band, its
+    /// periodicity score, and the harmonic its cycles were timed from.
+    weights: Option<Vec<f64>>,
+    band_fraction: Option<f64>,
+    score: f64,
+    timing_harmonic: u32,
     /// Frame times used, seconds from the oldest frame: re-estimated from
     /// the camera's clock.
     frame_times: Vec<f64>,

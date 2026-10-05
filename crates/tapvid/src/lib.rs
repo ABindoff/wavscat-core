@@ -29,6 +29,7 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+pub mod extract;
 pub mod features;
 pub mod ingest;
 pub mod linalg;

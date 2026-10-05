@@ -71,6 +71,14 @@ pub struct VideoSpec {
     /// The hand moves: from this time, in seconds, it rests at this new
     /// centre, as fractions of the width and height.
     pub relocate: Option<(f64, (f64, f64))>,
+    /// The hand sways: its rest position oscillates at this rate (Hz) by
+    /// this much, as fractions of the width and height.
+    pub sway: Option<(f64, f64, f64)>,
+    /// The hand wanders, as with poor postural control: its rest position
+    /// follows a smooth irregular path, a sum of four slow sinusoids between
+    /// 0.15 and 1.2 Hz, with this peak amplitude as a fraction of the width
+    /// (and three quarters of it vertically).
+    pub wander: Option<f64>,
     pub seed: u64,
 }
 
@@ -96,6 +104,8 @@ impl Default for VideoSpec {
             camera_shake: None,
             drift: None,
             relocate: None,
+            sway: None,
+            wander: None,
             seed: 1,
         }
     }
@@ -156,6 +166,20 @@ impl VideoSynth {
         &self.spec
     }
 
+    /// The wander path at time `t`, each coordinate within -1 to 1: four
+    /// sinusoids with seeded rates in 0.15-1.2 Hz and phases.
+    fn wander_at(&self, t: f64) -> (f64, f64) {
+        let mut g = SplitMix64::new(self.spec.seed ^ 0x3a4d_e400);
+        let (mut x, mut y) = (0.0, 0.0);
+        for _ in 0..4 {
+            let (fx, px) = (0.15 + 1.05 * g.uniform(), 2.0 * std::f64::consts::PI * g.uniform());
+            let (fy, py) = (0.15 + 1.05 * g.uniform(), 2.0 * std::f64::consts::PI * g.uniform());
+            x += 0.25 * math::sin(2.0 * std::f64::consts::PI * fx * t + px);
+            y += 0.25 * math::sin(2.0 * std::f64::consts::PI * fy * t + py);
+        }
+        (x, y)
+    }
+
     /// The global gain at time `t`.
     fn gain(&self, t: f64) -> f64 {
         let s = &self.spec;
@@ -197,6 +221,16 @@ impl VideoSynth {
         if let Some((vx, vy)) = s.drift {
             fx += vx * t;
             fy += vy * t;
+        }
+        if let Some((rate, ax, ay)) = s.sway {
+            let a = 2.0 * std::f64::consts::PI * rate * t;
+            fx += ax * math::sin(a);
+            fy += ay * math::cos(a);
+        }
+        if let Some(amp) = s.wander {
+            let (dx, dy) = self.wander_at(t);
+            fx += amp * dx;
+            fy += 0.75 * amp * dy;
         }
         let cx = fx * w as f64;
         let cy = fy * h as f64 + s.displacement * amp * wave;

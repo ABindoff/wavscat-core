@@ -878,7 +878,7 @@ function renderResult(trial, key) {
 
   el.innerHTML = `
     <h2>${trial.title}${res.hand_tracking ? "" : " (video only)"}${res.replay_of ? ` (replay of ${res.replay_of})` : ""}</h2>
-    <p>Video pipeline: ${verdict}. ${a ? `f<sub>0</sub> = ${fmt(a.f0_hz, 2)} Hz${a.from_harmonic ? " (timed from its second harmonic)" : ""}, component ${a.component + 1} of ${a.ranking.length}, ${a.itis.length} intervals, loading spread ${fmt(a.loading_spread, 3)}, competitor ratio ${fmt(a.competitor_ratio, 2)}.` : ""}
+    <p>Video pipeline: ${verdict}. ${a ? `f<sub>0</sub> = ${fmt(a.f0_hz, 2)} Hz${a.from_harmonic ? " (read from a harmonic)" : ""}, set by component ${a.component + 1} of ${a.ranking.length}; ${a.weights ? `the tapping signal combines all ${a.ranking.length} components, ${fmt(100 * a.band_fraction, 0)}% of its power in the tapping band` : "the tapping signal is that component"}, timed from ${a.timing_harmonic === 1 ? "the fundamental" : `harmonic ${a.timing_harmonic}`}; score ${fmt(a.score, 2)}, ${a.itis.length} intervals, loading spread ${fmt(a.loading_spread, 3)}, competitor ratio ${fmt(a.competitor_ratio, 2)}.` : ""}
       ${res.frames} frames (${fmt(diag.report.qc.effective_fps, 1)} fps effective).</p>
     <h3>Agreement with each hand's landmark trace</h3>
     <div class="scroll"><table>

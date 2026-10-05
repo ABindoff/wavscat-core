@@ -10,11 +10,12 @@
 use wavscat_core::Error;
 
 use crate::clock::{regularise, ClockParams, ClockQc};
+use crate::extract::{extract, ExtractParams};
 use crate::ingest::{Ingest, IngestQc};
 use crate::phase::{analyse_at, CycleAnalysis, PhaseParams};
 use crate::preprocess::{detrend, preprocess, GainQc, PreprocessParams};
 use crate::resample::resample;
-use crate::select::{select, BandParams, F0Case, Periodicity, Selection};
+use crate::select::{periodicity, select, BandParams, F0Case, Periodicity, Selection};
 use crate::spectrum::WelchParams;
 use crate::svd::{randomized_svd, SvdParams};
 
@@ -26,6 +27,9 @@ pub struct PipelineParams {
     pub clock: Option<ClockParams>,
     pub preprocess: PreprocessParams,
     pub svd: SvdParams,
+    /// Combine every component by its power in the tapping band (see
+    /// [`crate::extract`]); `None` keeps the single selected component.
+    pub extract: Option<ExtractParams>,
     /// Uniform rate the components are resampled to, in Hz.
     pub fs: f64,
     /// Longest capture gap, in seconds, that resampling may bridge.
@@ -41,6 +45,7 @@ impl Default for PipelineParams {
             clock: Some(ClockParams::default()),
             preprocess: PreprocessParams::default(),
             svd: SvdParams::default(),
+            extract: Some(ExtractParams::default()),
             fs: 30.0,
             max_gap: 0.15,
             welch: WelchParams::default(),
@@ -72,11 +77,21 @@ pub struct TrialResult {
     pub loading: Option<Vec<f64>>,
     /// Components ranked by periodicity score.
     pub selection: Selection,
-    /// Index of the selected component.
+    /// Index of the selected component, which sets the rate.
     pub component: usize,
-    /// The selected component, resampled: `t0 + i / fs`.
+    /// The tapping signal, resampled: `t0 + i / fs`. The combination of
+    /// components extracted by their power in the tapping band, or the
+    /// selected component alone if extraction is off.
     pub t0: f64,
     pub signal: Vec<f64>,
+    /// Weight of each component in `signal`, and the share of its power in
+    /// the tapping bands; `None` without extraction.
+    pub weights: Option<Vec<f64>>,
+    pub band_fraction: Option<f64>,
+    /// Periodicity score of `signal`, for QC.
+    pub score: f64,
+    /// The harmonic of `f0_hz` the cycles were timed from.
+    pub timing_harmonic: u32,
     /// Tapping fundamental, in Hz, and whether it was read from the second
     /// harmonic.
     pub f0_hz: f64,
@@ -90,6 +105,20 @@ pub struct TrialResult {
 
 /// Analyse the frames held by `ing`. Times in the result are seconds from
 /// the oldest held frame.
+/// Overlap of two spatial maps: the cosine similarity of their squares, from
+/// 0 when they move different pixels to 1 when they move the same ones in
+/// the same proportions.
+pub fn map_overlap(a: &[f64], b: &[f64]) -> f64 {
+    let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+    for (x, y) in a.iter().zip(b) {
+        let (x2, y2) = (x * x, y * y);
+        ab += x2 * y2;
+        aa += x2 * x2;
+        bb += y2 * y2;
+    }
+    if aa > 0.0 && bb > 0.0 { ab / (aa * bb).sqrt() } else { 0.0 }
+}
+
 /// The frame times to analyse with: `raw`, re-estimated from the camera's
 /// clock if `p.clock` asks for it.
 pub fn frame_times(raw: Vec<f64>, p: &PipelineParams) -> Result<(Vec<f64>, Option<ClockQc>), Error> {
@@ -126,15 +155,46 @@ pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Er
 
     let selection = select(&uniform, p.fs, &p.welch, &p.band)?;
     let (component, best) = selection.best().clone();
-    let competitor_ratio = match selection.competitor() {
-        Some((_, r)) if best.score > 0.0 => r.score / best.score,
+    let loadings = svd.loadings.take().expect("requested");
+
+    // The tapping signal: every component weighted by its power in the
+    // tapping band, or the selected one alone.
+    let (signal, weights, band_fraction, harmonic, map) = match &p.extract {
+        Some(ep) => {
+            let ex = extract(&uniform, p.fs, best.f0_hz, component, ep)?;
+            // The pixel map of the signal's pattern, not of its weights.
+            let mut map = vec![0.0; loadings[0].len()];
+            for (w, l) in ex.pattern.iter().zip(&loadings) {
+                for (m, v) in map.iter_mut().zip(l) {
+                    *m += w * v;
+                }
+            }
+            let norm = map.iter().map(|v| v * v).sum::<f64>().sqrt();
+            if norm > 0.0 {
+                for m in map.iter_mut() {
+                    *m /= norm;
+                }
+            }
+            let h = ex.timing_harmonic();
+            (ex.signal, Some(ex.weights), Some(ex.band_fraction), h, map)
+        }
+        None => (uniform[component].clone(), None, None, best.timing_harmonic(), loadings[component].clone()),
+    };
+    let score = if p.extract.is_some() { periodicity(&signal, p.fs, &p.welch, &p.band)?.score } else { best.score };
+    // The strongest other rhythm that is fast enough to be someone else
+    // tapping rather than the participant swaying, and somewhere else in the
+    // frame, against the tapping's strength.
+    let competitor = selection
+        .competitors_above(p.band.competitor_min_hz)
+        .find(|(i, _)| map_overlap(&loadings[*i], &map) < p.band.competitor_max_overlap);
+    let tapping_strength = selection.oscillator_strength();
+    let competitor_ratio = match competitor {
+        Some((_, r)) if tapping_strength > 0.0 => r.strength / tapping_strength,
         _ => 0.0,
     };
-    let cycles = analyse_at(&uniform[component], p.fs, t0, best.f0_hz, best.timing_harmonic(), &p.phase)?;
+    let cycles = analyse_at(&signal, p.fs, t0, best.f0_hz, harmonic, &p.phase)?;
 
     // Loading spread: 1 / (cells * sum v^4) for a unit-norm loading.
-    let mut loadings = svd.loadings.take().expect("requested");
-    let map = loadings.swap_remove(component);
     let mut fourth = 0.0;
     for v in &map {
         fourth += v * v * v * v;
@@ -152,7 +212,11 @@ pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Er
         loading,
         component,
         t0,
-        signal: uniform.swap_remove(component),
+        signal,
+        weights,
+        band_fraction,
+        score,
+        timing_harmonic: harmonic,
         f0_hz: best.f0_hz,
         case: best.case,
         competitor_ratio,

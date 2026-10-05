@@ -111,8 +111,11 @@ fn a_second_rhythmic_object_is_flagged() {
         distractor: Some(Distractor { rate_hz: 4.5, displacement: 15.0, radius: 10.0, contrast: 90.0, centre: (0.8, 0.3) }),
         ..VideoSpec::default()
     };
+    // The ratio compares movement strength, and this object moves 15 px to
+    // the hand's 20, so it is a little under one; QC must still reject.
+    let limit = tapvid::qc::QcParams::default().max_competitor_ratio;
     for seed in 1..=2 {
         let (r, _) = run(&spec, seed);
-        assert!(r.competitor_ratio > 0.7, "competitor {}", r.competitor_ratio);
+        assert!(r.competitor_ratio > limit + 0.1, "competitor {}", r.competitor_ratio);
     }
 }

@@ -62,6 +62,16 @@ pub struct BandParams {
     /// Width of the band-passes used to measure locking, as a fraction of
     /// their centre frequency.
     pub locking_bandwidth: f64,
+    /// Rhythms slower than this, in Hz, never count as a competing
+    /// oscillator: sway, repositioning and other slow movements of a person
+    /// who cannot hold perfectly still are not a reason to reject a trial.
+    pub competitor_min_hz: f64,
+    /// A rhythm counts as competing only where it is somewhere else in the
+    /// frame: the overlap of its spatial map with the tapping's (0 for
+    /// disjoint, 1 for the same place) must be below this. Sidebands of
+    /// tapping in a swaying hand sit on the hand itself; a second person, a
+    /// pet or a tremor in the other hand does not.
+    pub competitor_max_overlap: f64,
 }
 
 impl Default for BandParams {
@@ -75,6 +85,8 @@ impl Default for BandParams {
             walk_min_ratio: 0.01,
             half_min_locking: 0.5,
             locking_alpha: 0.01,
+            competitor_min_hz: 1.5,
+            competitor_max_overlap: 0.3,
             locking_bandwidth: 0.3,
         }
     }
@@ -113,6 +125,10 @@ pub struct Periodicity {
     /// Set by [`select`] when the component is a harmonic of motion below the
     /// tapping band, such as a sway; it cannot be selected.
     pub excluded: bool,
+    /// How much movement the rhythm carries: `score` times the component's
+    /// share of the variance of all components. Set by [`select`], which
+    /// ranks by it; zero from [`periodicity`] alone.
+    pub strength: f64,
 }
 
 impl Periodicity {
@@ -268,10 +284,11 @@ pub fn periodicity(x: &[f64], fs: f64, w: &WelchParams, b: &BandParams) -> Resul
         half_locking,
         harmonic: if case == F0Case::Harmonic { 2 } else { 1 },
         excluded: false,
+        strength: 0.0,
     })
 }
 
-/// Components ranked by score, best first.
+/// Components ranked by strength, best first.
 #[derive(Debug, Clone)]
 pub struct Selection {
     /// `(component index, periodicity)`: selectable components in descending
@@ -303,13 +320,34 @@ impl Selection {
     /// counts as the same oscillator: a harmonic whose link to the
     /// fundamental was too weak to confirm in its own component.
     pub fn competitor(&self) -> Option<&(usize, Periodicity)> {
+        self.competitor_above(0.0)
+    }
+
+    /// [`Selection::competitor`], counting only rhythms of at least `min_hz`.
+    pub fn competitor_above(&self, min_hz: f64) -> Option<&(usize, Periodicity)> {
+        self.competitors_above(min_hz).next()
+    }
+
+    /// Every selectable component from a different oscillator than the
+    /// selected one, of at least `min_hz`, strongest first.
+    pub fn competitors_above(&self, min_hz: f64) -> impl Iterator<Item = &(usize, Periodicity)> {
+        self.ranking[1..].iter().filter(move |(_, p)| !p.excluded && p.f0_hz >= min_hz && !self.related(p.f0_hz))
+    }
+
+    /// Whether `f` is within the tolerance of 1 to 4 times the selected
+    /// fundamental, or of a half, third or quarter of it.
+    pub fn related(&self, f: f64) -> bool {
         let f0 = self.best().1.f0_hz;
-        let related = |f: f64| {
-            let r = if f >= f0 { f / f0 } else { f0 / f };
-            let k = r.round();
-            (1.0..=4.0).contains(&k) && (r - k).abs() <= self.tolerance * k
-        };
-        self.ranking[1..].iter().filter(|(_, p)| !p.excluded).find(|(_, p)| !related(p.f0_hz))
+        let r = if f >= f0 { f / f0 } else { f0 / f };
+        let k = r.round();
+        (1.0..=4.0).contains(&k) && (r - k).abs() <= self.tolerance * k
+    }
+
+    /// The strength of the selected oscillator: the summed strength of every
+    /// selectable component related to it, since tapping often spreads over
+    /// several.
+    pub fn oscillator_strength(&self) -> f64 {
+        self.ranking.iter().filter(|(_, p)| !p.excluded && self.related(p.f0_hz)).map(|(_, p)| p.strength).sum()
     }
 }
 
@@ -453,7 +491,19 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
     }
 
     // Selectable components by score, then excluded ones.
-    ranking.sort_by(|x, y| x.1.excluded.cmp(&y.1.excluded).then(y.1.score.total_cmp(&x.1.score)));
+    // Rank by strength: a clean but small rhythm, such as a tremor in the
+    // other hand, is purer than tapping, whose intervals vary, and would win
+    // on score alone; but the participant was asked to tap widely, and the
+    // tapping carries more movement.
+    let variance: Vec<f64> = components.iter().map(|x| {
+        let m = x.iter().sum::<f64>() / x.len() as f64;
+        x.iter().map(|v| (v - m) * (v - m)).sum::<f64>() / x.len() as f64
+    }).collect();
+    let total: f64 = variance.iter().sum();
+    for (i, per) in ranking.iter_mut() {
+        per.strength = if total > 0.0 { per.score * variance[*i] / total } else { per.score };
+    }
+    ranking.sort_by(|x, y| x.1.excluded.cmp(&y.1.excluded).then(y.1.strength.total_cmp(&x.1.strength)));
     if ranking[0].1.excluded {
         return Err(Error(
             "Every component is a harmonic of motion below the tapping band; no tapping found.".into(),

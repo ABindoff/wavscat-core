@@ -283,7 +283,7 @@ pub fn run_trial(ing: &Ingest, p: &PipelineParams, q: &QcParams) -> TrialOutput 
     }
 
     // The tapping itself.
-    let score = r.selection.best().1.score;
+    let score = r.score;
     let usable = usable_cycles(&r.cycles.itis, &r.cycles.amplitudes, q.usable_iti_factor, q.usable_min_amplitude);
     qc.score = Some(score);
     qc.competitor_ratio = Some(r.competitor_ratio);

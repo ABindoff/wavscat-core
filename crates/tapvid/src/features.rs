@@ -275,6 +275,16 @@ pub fn canonical_params(pipeline: &PipelineParams, qc: &QcParams, p: &FeaturePar
     put("band.half_min_locking", format!("{:?}", b.half_min_locking));
     put("band.locking_alpha", format!("{:?}", b.locking_alpha));
     put("band.locking_bandwidth", format!("{:?}", b.locking_bandwidth));
+    put("band.competitor_min_hz", format!("{:?}", b.competitor_min_hz));
+    put("band.competitor_max_overlap", format!("{:?}", b.competitor_max_overlap));
+    match &pipeline.extract {
+        None => put("extract", "none".to_string()),
+        Some(e) => {
+            put("extract.bandwidth", format!("{:?}", e.bandwidth));
+            put("extract.harmonics", e.harmonics.to_string());
+            put("extract.min_eigen", format!("{:?}", e.min_eigen));
+        }
+    }
     let ph = &pipeline.phase;
     put("phase.bandwidth", format!("{:?}", ph.bandwidth));
     put("phase.pad_cycles", format!("{:?}", ph.pad_cycles));
