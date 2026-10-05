@@ -27,12 +27,39 @@ at the operator's rate.
 - `tests/kymatio_parity.rs` and `tests/kymatio_parity_jtfs.rs` check agreement
   with Kymatio, using the reference values from the R package, at the R
   package's tolerances. Observed relative errors are between 3e-16 and 6e-14.
-- `tests/golden.rs` hashes the exact output bits of a fixed set of transforms
-  and feature pipelines, and compares them with `golden/numerics-<version>.tsv`.
-  CI runs it on every target. To run it locally as wasm under Node:
+- `wavscat_core::verify` hashes the exact output bits of a fixed set of
+  transforms and feature pipelines, and compares them with the record in
+  `crates/wavscat-core/golden.tsv`, which is embedded in the library. CI runs it
+  natively on x86-64 and ARM64 under Linux, macOS and Windows, under WASI, and
+  through the wasm binding in Chromium, Firefox and WebKit. To run it locally as
+  wasm under Node:
 
       cargo test --release --target wasm32-wasip1 --test golden --no-run
       node tools/run-wasi.mjs target/wasm32-wasip1/release/deps/golden-*.wasm
+
+## Checking a device
+
+Because the record is embedded, an application can call `verify()` on a
+participant's own phone or tablet and confirm that it computes exactly what
+every other platform computes, before trusting its features. To check a device
+by hand, build the wasm module with `sh tools/build-wasm.sh`, serve
+`crates/wavscat-wasm/` over HTTP, and open `js/browser.html` on the device.
+`node crates/wavscat-wasm/js/test-browser.mjs` does the same in Playwright's
+browsers; set `BROWSERS=chrome,msedge` to use installed ones instead.
+
+## JavaScript
+
+```js
+import init, { Scattering1d, ScatteringJtfs, verify } from "./wavscat_wasm.js";
+await init();
+const op = new ScatteringJtfs({ n: 900, J: 7, J_fr: 3, Q: 8, T_sec: 6, sr: 30 });
+const S = op.transform(signal);   // signal: Float64Array of length 900
+op.paths();                       // one entry per path, R's labels
+S.path(5);                        // one path's coefficients
+```
+
+Parameter names are the R argument names, so one parameter set means the same
+thing in every language. Unknown names are rejected.
 
 To refresh the fixtures from the R package, run
 `Rscript tools/export-fixtures.R ../wavscat/tests/testthat/fixtures fixtures`.
@@ -51,7 +78,9 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
       averaging in time and frequency)
 - [x] Mixed-radix FFT with paired prime DFTs, and batched column transforms
       for the frequential axis
-- [ ] wasm-bindgen binding, and CI across targets and browsers
+- [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
+- [ ] JTFS S2/S1 renormalisation (by the time-scattering S1 of band n1)
+- [ ] Video tapping pipeline, as a separate crate
 - [ ] R binding through extendr; Python binding through PyO3
 
 ## Licence

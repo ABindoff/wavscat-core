@@ -1,0 +1,85 @@
+# Every job below checks the same thing from a different machine: that the
+# golden cases reproduce the reference record bit for bit. A failure anywhere
+# means outputs would differ between platforms.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: native (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86-64 and ARM64 on each operating system.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Tests, optimised
+        run: cargo test --release -p wavscat-core
+      - name: Golden record, unoptimised
+        run: cargo test -p wavscat-core --test golden
+      - name: No platform transcendental functions
+        run: cargo clippy -p wavscat-core --all-targets -- -D clippy::disallowed_methods
+
+  wasi:
+    name: wasm32-wasip1 under Node
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the golden test
+        run: cargo test --release --target wasm32-wasip1 -p wavscat-core --test golden --no-run
+      - name: Run it under WASI
+        shell: bash
+        run: |
+          for w in target/wasm32-wasip1/release/deps/golden-*.wasm; do
+            node tools/run-wasi.mjs "$w"
+          done
+
+  browsers:
+    name: browsers (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # WebKit on macOS is the closest CI gets to iOS Safari.
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen@0.2.129
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the wasm module
+        run: sh tools/build-wasm.sh
+      - name: Node tests of the binding
+        run: node --test crates/wavscat-wasm/js/test-node.mjs
+      - name: Install Playwright browsers
+        working-directory: crates/wavscat-wasm/js
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium firefox webkit
+      - name: verify() in Chromium, Firefox and WebKit
+        working-directory: crates/wavscat-wasm/js
+        run: node test-browser.mjs

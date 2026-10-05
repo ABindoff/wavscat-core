@@ -30,6 +30,7 @@ pub mod jtfs;
 pub mod math;
 pub mod pad;
 pub mod scattering1d;
+pub mod verify;
 
 pub use error::Error;
 

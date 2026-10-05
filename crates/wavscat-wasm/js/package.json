@@ -1,0 +1,13 @@
+{
+  "name": "wavscat-wasm-tests",
+  "private": true,
+  "type": "module",
+  "description": "Node and browser tests of the wavscat wasm binding",
+  "scripts": {
+    "test:node": "node --test test-node.mjs",
+    "test:browser": "node test-browser.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

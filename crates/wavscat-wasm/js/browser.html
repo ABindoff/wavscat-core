@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>wavscat verify</title>
+<style>
+  :root { --bg: #fff; --fg: #1a1a1a; --ok: #146c2e; --bad: #a4161a; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #161616; --fg: #ececec; --ok: #6fd18a; --bad: #ff7b7b; }
+  }
+  body { background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  pre { white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>wavscat bit-identity check</h1>
+<p id="status">Running the golden cases on this device&hellip;</p>
+<pre id="detail"></pre>
+<script type="module">
+  // Runs every golden case and compares each output bit with the reference
+  // record. Open on a phone or tablet to check that device directly; the CI
+  // browser tests read window.__wavscat.
+  import init, { verify, numericsVersion } from "../pkg-web/wavscat_wasm.js";
+  const status = document.getElementById("status");
+  try {
+    await init();
+    const t0 = performance.now();
+    const diffs = verify();
+    const ms = performance.now() - t0;
+    window.__wavscat = { diffs, version: numericsVersion(), ms, ua: navigator.userAgent };
+    status.className = diffs.length === 0 ? "ok" : "bad";
+    status.textContent = diffs.length === 0
+      ? `Identical: every output bit matches (numerics ${numericsVersion()}, ${ms.toFixed(0)} ms).`
+      : `Mismatch on ${diffs.length} line(s): this device's arithmetic differs.`;
+    document.getElementById("detail").textContent = diffs.join("\n\n");
+  } catch (e) {
+    window.__wavscat = { error: String(e) };
+    status.className = "bad";
+    status.textContent = `Error: ${e}`;
+  }
+</script>
+</body>
+</html>
