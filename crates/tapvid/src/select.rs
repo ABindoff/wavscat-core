@@ -22,6 +22,8 @@
 //! harmonic's line twice as much as the fundamental's, and its skirt fills the
 //! spectrum below. Locking is unaffected by that broadening.
 
+use std::f64::consts::PI;
+
 use wavscat_core::{math, Error};
 
 use crate::phase::analytic_band;
@@ -38,12 +40,25 @@ pub struct BandParams {
     /// Half-width of the power windows around `f` and `f / 2`, as a fraction
     /// of their centre frequency.
     pub half_tolerance: f64,
-    /// The power near `f / 2` must be at least this fraction of the power
-    /// near `f`. 0.01 is an amplitude ratio of 0.1.
+    /// Within one component, the power near `f / 2` must be at least this
+    /// fraction of the power near `f` for `f` to count as its second
+    /// harmonic. 0.07 is an amplitude ratio of about 0.26. Real tapping often
+    /// carries a weak, phase-locked subharmonic (alternating large and small
+    /// taps); at 3 to 5% of the power it is not the tapping rate.
     pub half_min_ratio: f64,
-    /// ...and at least this phase-locked to `f`, on a scale from 0 (none) to
-    /// 1 (perfect).
+    /// Across components, the power near `f / m` in one component must be at
+    /// least this fraction of the power near `f` in another. Lower than
+    /// `half_min_ratio`, because the SVD often puts the fundamental in a
+    /// weaker component than its harmonic.
+    pub walk_min_ratio: f64,
+    /// ...and the subharmonic must be at least this phase-locked to `f`, on
+    /// a scale from 0 (none) to 1 (perfect)...
     pub half_min_locking: f64,
+    /// ...and more locked than chance allows at this significance level,
+    /// given how many independent cycles the trial holds and how many
+    /// candidates were tested (see [`locking_threshold`]). A short trial
+    /// holds few cycles, and chance alone can then pass 0.5.
+    pub locking_alpha: f64,
     /// Width of the band-passes used to measure locking, as a fraction of
     /// their centre frequency.
     pub locking_bandwidth: f64,
@@ -56,8 +71,10 @@ impl Default for BandParams {
             hi: 7.0,
             peak_halfwidth: 0.25,
             half_tolerance: 0.1,
-            half_min_ratio: 0.01,
+            half_min_ratio: 0.07,
+            walk_min_ratio: 0.01,
             half_min_locking: 0.5,
+            locking_alpha: 0.01,
             locking_bandwidth: 0.3,
         }
     }
@@ -144,6 +161,39 @@ fn sum(v: &[f64]) -> f64 {
     acc
 }
 
+/// Power summed over `fc` times one plus or minus `tolerance`.
+fn window_power(psd: &Psd, fc: f64, tolerance: f64) -> f64 {
+    let (a, z) = (bin(psd, fc * (1.0 - tolerance)).max(1), bin(psd, fc * (1.0 + tolerance)));
+    sum(&psd.power[a..=z.max(a)])
+}
+
+/// Whether `fc` is a genuine peak: at least twice the mean power of its
+/// flanks at 0.75 and 1.25 times `fc`. The phase-noise skirt of a strong line
+/// slopes rather than peaks, and can otherwise pass for one.
+fn prominent(psd: &Psd, fc: f64, tolerance: f64) -> bool {
+    let flanks = 0.5 * (window_power(psd, 0.75 * fc, tolerance) + window_power(psd, 1.25 * fc, tolerance));
+    window_power(psd, fc, tolerance) >= 2.0 * flanks
+}
+
+/// The locking a subharmonic at `f / m` needs, in a series of `n` samples at
+/// `fs` Hz, when `tests` candidates were tried: `half_min_locking`, or the
+/// level chance reaches with probability `locking_alpha / tests`, whichever
+/// is higher.
+///
+/// Under no locking, the locking statistic of `N` independent samples
+/// exceeds `r` with probability about `exp(-N r^2)` (the Rayleigh test). The
+/// samples are independent over the correlation time of `z_low^m`, whose
+/// band has standard deviation `bandwidth * f / sqrt(m)` Hz; a Gaussian
+/// spectrum of standard deviation `s` decorrelates in `1 / (2 sqrt(pi) s)`
+/// seconds. So `N = 2 sqrt(pi) s T` for a trial of `T` seconds: about 20 for
+/// 10 s of tapping at 4 Hz with `m = 2`, where chance reaches 0.5.
+pub fn locking_threshold(b: &BandParams, n: usize, fs: f64, f: f64, m: u32, tests: usize) -> f64 {
+    let s = b.locking_bandwidth * f / (m as f64).sqrt();
+    let cycles = 2.0 * PI.sqrt() * s * (n as f64 / fs);
+    let chance = (math::ln(tests.max(1) as f64 / b.locking_alpha) / cycles).sqrt();
+    b.half_min_locking.max(chance)
+}
+
 /// Phase locking of the band around `f / 2` to the band around `f`:
 /// `|sum z1^2 conj(z2)| / sum |z1|^2 |z2|`, which is 1 when the angle of
 /// `z1^2 conj(z2)` never changes and near 0 when it wanders.
@@ -196,13 +246,11 @@ pub fn periodicity(x: &[f64], fs: f64, w: &WelchParams, b: &BandParams) -> Resul
     let half_window = window(peak_hz / 2.0);
     let half_in_band = peak_hz / 2.0 >= b.lo && peak_hz / 2.0 <= b.hi;
     let half_ratio = if at_peak > 0.0 { power_in(half_window) / at_peak } else { 0.0 };
-    let half_locking = if half_in_band && half_ratio >= b.half_min_ratio {
-        locking(x, fs, peak_hz, b.locking_bandwidth)
-    } else {
-        0.0
-    };
+    let half_candidate = half_in_band && half_ratio >= b.half_min_ratio && prominent(&psd, peak_hz / 2.0, b.half_tolerance);
+    let half_locking = if half_candidate { locking(x, fs, peak_hz, b.locking_bandwidth) } else { 0.0 };
+    let needed = locking_threshold(b, x.len(), fs, peak_hz, 2, 1);
 
-    let (case, f0_hz) = if half_in_band && half_ratio >= b.half_min_ratio && half_locking >= b.half_min_locking {
+    let (case, f0_hz) = if half_candidate && half_locking >= needed {
         (F0Case::Harmonic, refine(&psd, argmax(p, half_window.0..=half_window.1)))
     } else {
         // Not a harmonic: the fundamental is the strongest in-band peak.
@@ -312,22 +360,23 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
     let window = |psd: &Psd, fc: f64| {
         (bin(psd, fc * (1.0 - b.half_tolerance)).max(1), bin(psd, fc * (1.0 + b.half_tolerance)))
     };
-    let window_power = |psd: &Psd, fc: f64| {
-        let (a, z) = window(psd, fc);
-        sum(&psd.power[a..=z.max(a)])
-    };
-    // A subharmonic must be a genuine peak in its component: at least twice
-    // the mean power of its flanks. The phase-noise skirt of a strong line
-    // slopes rather than peaks, and can otherwise pass for one.
-    let prominent = |psd: &Psd, fc: f64| {
-        let flanks = 0.5 * (window_power(psd, 0.75 * fc) + window_power(psd, 1.25 * fc));
-        window_power(psd, fc) >= 2.0 * flanks
-    };
+    let window_power = |psd: &Psd, fc: f64| window_power(psd, fc, b.half_tolerance);
+    let prominent = |psd: &Psd, fc: f64| prominent(psd, fc, b.half_tolerance);
+    // Each step tries m = 2, 3, 4 in every component.
+    let tests = 3 * components.len();
+    let n = components[0].len();
     for (i, per) in ranking.iter_mut() {
         // Walk down the harmonic chain from the dominant peak: at each step
         // take the smallest m whose subharmonic is a prominent peak in some
         // component and phase-locked to the current frequency, until none is.
         // 12 Hz goes to 6 and then 3; a sway's 1.2 Hz goes to 0.4.
+        //
+        // A step of 3 or 4 is taken only below the band, towards a sway. A
+        // fingertip, or a pixel it crosses twice a cycle, puts its energy in
+        // the fundamental and second harmonic; tapping whose third or fourth
+        // harmonic dominates while its fundamental sits in another component
+        // is not seen, and on real video such a step turned a 4 Hz tapping
+        // peak into a 1 Hz "fundamental" borrowed from slow arm motion.
         let mut f = per.peak_hz;
         let mut source = *i;
         let mut total = 1u32;
@@ -343,9 +392,16 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
                 if target < 2.0 * psds[source].df() {
                     break;
                 }
+                if m > 2 && target >= b.lo {
+                    continue;
+                }
+                let needed = locking_threshold(b, n, fs, f, m, tests);
                 let mut found: Option<(usize, f64)> = None;
                 for (j, x) in components.iter().enumerate() {
-                    if window_power(&psds[j], target) / at_f < b.half_min_ratio || !prominent(&psds[j], target) {
+                    // Within the same component, the stricter floor of the
+                    // single-component test applies.
+                    let floor = if j == source { b.half_min_ratio } else { b.walk_min_ratio };
+                    if window_power(&psds[j], target) / at_f < floor || !prominent(&psds[j], target) {
                         continue;
                     }
                     let lock = cross_locking(x, &components[source], fs, f, m, b.locking_bandwidth);
@@ -353,7 +409,7 @@ pub fn select(components: &[Vec<f64>], fs: f64, w: &WelchParams, b: &BandParams)
                         Some((_, l)) => lock > l,
                         None => true,
                     };
-                    if lock >= b.half_min_locking && better {
+                    if lock >= needed && better {
                         found = Some((j, lock));
                     }
                 }

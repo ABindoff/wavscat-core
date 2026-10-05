@@ -215,7 +215,9 @@ pub fn canonical_params(pipeline: &PipelineParams, qc: &QcParams, p: &FeaturePar
     put("band.peak_halfwidth", format!("{:?}", b.peak_halfwidth));
     put("band.half_tolerance", format!("{:?}", b.half_tolerance));
     put("band.half_min_ratio", format!("{:?}", b.half_min_ratio));
+    put("band.walk_min_ratio", format!("{:?}", b.walk_min_ratio));
     put("band.half_min_locking", format!("{:?}", b.half_min_locking));
+    put("band.locking_alpha", format!("{:?}", b.locking_alpha));
     put("band.locking_bandwidth", format!("{:?}", b.locking_bandwidth));
     let ph = &pipeline.phase;
     put("phase.bandwidth", format!("{:?}", ph.bandwidth));

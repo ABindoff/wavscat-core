@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use tapvid::phase::{analyse_at, PhaseParams};
 use tapvid::resample::resample;
 use tapvid::rng::SplitMix64;
-use tapvid::select::{periodicity, select, BandParams, F0Case};
+use tapvid::select::{locking_threshold, periodicity, select, BandParams, F0Case};
 use tapvid::spectrum::WelchParams;
 use tapvid::synth::{render, FrameClock, TapSpec};
 use wavscat_core::math;
@@ -129,4 +129,65 @@ fn stage_five_feeds_stage_six() {
         let true_sd = (truth.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (truth.len() - 1) as f64).sqrt();
         assert!((a.summary.sd - true_sd).abs() < 0.004, "seed {seed}: SD {} vs {true_sd}", a.summary.sd);
     }
+}
+
+/// Tapping at `rate` Hz with a slowly wandering phase, plus a phase-locked
+/// subharmonic at `rate / m` of amplitude `sub`, as alternating large and
+/// small taps make: `seconds` long at 30 Hz.
+fn with_subharmonic(rate: f64, m: f64, sub: f64, seconds: f64, seed: u64) -> (Vec<f64>, Vec<f64>) {
+    let mut rng = SplitMix64::new(seed);
+    let n = (seconds * FS) as usize;
+    let mut phase = 0.0;
+    let (mut tap, mut slow) = (Vec::with_capacity(n), Vec::with_capacity(n));
+    for _ in 0..n {
+        phase += 2.0 * PI * rate / FS + 0.02 * rng.normal();
+        tap.push(math::cos(phase) + 0.1 * rng.normal());
+        slow.push(sub * math::cos(phase / m + 0.4));
+    }
+    (tap, slow)
+}
+
+#[test]
+fn a_weak_locked_subharmonic_does_not_halve_the_rate() {
+    // Real thumb-index tapping at 4 Hz carried a perfectly locked 2 Hz line
+    // at 3 to 5% of its power; it is not the tapping rate.
+    for seconds in [10.0, 30.0] {
+        for seed in 1..=5 {
+            let (tap, slow) = with_subharmonic(4.0, 2.0, 0.2, seconds, seed);
+            let x: Vec<f64> = tap.iter().zip(&slow).map(|(a, b)| a + b).collect();
+            let p = score(&x);
+            assert_eq!(p.case, F0Case::Fundamental, "{seconds} s, seed {seed}: {p:?}");
+            let s = select(&[x], FS, &WelchParams::default(), &BandParams::default()).unwrap();
+            assert!((s.best().1.f0_hz - 4.0).abs() < 0.2, "{seconds} s, seed {seed}: {:?}", s.best());
+        }
+    }
+}
+
+#[test]
+fn slow_motion_locked_to_the_tapping_does_not_become_its_fundamental() {
+    // A 1 Hz arm motion locked to 4 Hz tapping, in its own component: a
+    // fourth-subharmonic step into the band is refused, so the tapping
+    // component keeps 4 Hz.
+    for seed in 1..=5 {
+        let (tap, slow) = with_subharmonic(4.0, 4.0, 1.0, 10.0, seed);
+        let s = select(&[tap, slow], FS, &WelchParams::default(), &BandParams::default()).unwrap();
+        let tapping = s.ranking.iter().find(|(i, _)| *i == 0).unwrap();
+        assert!((tapping.1.f0_hz - 4.0).abs() < 0.2, "seed {seed}: {:?}", s.ranking);
+        assert_eq!(tapping.1.harmonic, 1);
+    }
+}
+
+#[test]
+
+#[test]
+fn the_locking_needed_reflects_how_many_cycles_were_seen() {
+    let b = BandParams::default();
+    // Never below the floor; higher for a shorter trial, a deeper
+    // subharmonic or more candidates tested.
+    assert_eq!(locking_threshold(&b, 900, FS, 6.0, 2, 1), b.half_min_locking);
+    let short = locking_threshold(&b, 300, FS, 2.0, 2, 24);
+    assert!(short > locking_threshold(&b, 900, FS, 2.0, 2, 24));
+    assert!(short > locking_threshold(&b, 300, FS, 2.0, 2, 1));
+    assert!(locking_threshold(&b, 300, FS, 2.0, 4, 24) > short);
+    assert!(short > b.half_min_locking && short < 1.0, "{short}");
 }
