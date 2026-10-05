@@ -130,6 +130,26 @@ HD frames is under 27 MB. The build uses WebAssembly SIMD, which changes no
 output bit; set `WAVSCAT_WASM_SIMD=0` when running `tools/build-wasm.sh` to
 support browsers from before 2023.
 
+### Checking the video against hand landmarks
+
+`apps/tap-compare` is a page for validating the landmark-free pipeline on a
+real hand. It records three 10 s trials (left hand, right hand, and both hands
+tapping in anti-phase) and sends every frame both to a `TappingSession` and to
+MediaPipe Hands. Each hand's thumb–index aperture then goes through
+`analyseTrace`, which applies the same drift removal, resampling, cycle timing
+and features as the video's selected component. The page compares the two:
+the fundamental, waveform correlation, tap timing, inter-tap intervals and
+the JTFS features, with the component's spatial loading drawn under the
+landmark positions. `TappingSession.diagnose()` supplies the ungated analysis
+behind each verdict.
+
+    sh tools/build-wasm.sh
+    node apps/tap-compare/serve.mjs     # then open http://localhost:8000/apps/tap-compare/
+
+The page loads MediaPipe from jsDelivr and its hand model from Google; no
+frame leaves the browser. The JSON download holds the reports, the traces and
+the landmark coordinates, but no images.
+
 To refresh the fixtures from the R package, run
 `Rscript tools/export-fixtures.R ../wavscat/tests/testthat/fixtures fixtures`.
 

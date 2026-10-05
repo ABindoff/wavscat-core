@@ -3,15 +3,17 @@
 //! [`analyse_trial`] runs stages 2 to 6 over the frames an [`Ingest`] holds:
 //! preprocess, randomized SVD, resample every component to a uniform grid,
 //! select the tapping component and its fundamental, and time its cycles.
-//! QC gating and JTFS features build on its result.
+//! QC gating and JTFS features build on its result. [`analyse_trace`] runs
+//! the same stages from drift removal on, over one trace that did not come
+//! from frames, such as a landmark distance, for comparison with the video.
 
 use wavscat_core::Error;
 
 use crate::ingest::{Ingest, IngestQc};
 use crate::phase::{analyse_at, CycleAnalysis, PhaseParams};
-use crate::preprocess::{preprocess, GainQc, PreprocessParams};
+use crate::preprocess::{detrend, preprocess, GainQc, PreprocessParams};
 use crate::resample::resample;
-use crate::select::{select, BandParams, F0Case, Selection};
+use crate::select::{select, BandParams, F0Case, Periodicity, Selection};
 use crate::spectrum::WelchParams;
 use crate::svd::{randomized_svd, SvdParams};
 
@@ -133,4 +135,38 @@ pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Er
         cycles,
         selection,
     })
+}
+
+/// One trace through the stages after the SVD.
+#[derive(Debug, Clone)]
+pub struct TraceResult {
+    /// The trace, detrended and resampled: `t0 + i / fs`.
+    pub t0: f64,
+    pub signal: Vec<f64>,
+    pub periodicity: Periodicity,
+    pub f0_hz: f64,
+    pub case: F0Case,
+    pub cycles: CycleAnalysis,
+}
+
+/// Analyse a single trace sampled at `timestamps` seconds, such as the
+/// distance between two hand landmarks, as [`analyse_trial`] analyses the
+/// selected video component: drift removed as each pixel's is, resampled to
+/// the same grid, its fundamental found the same way, and its cycles timed.
+pub fn analyse_trace(timestamps: &[f64], values: &[f64], p: &PipelineParams) -> Result<TraceResult, Error> {
+    let clean = detrend(timestamps, values, p.preprocess.detrend_cutoff)?;
+    let u = resample(timestamps, &clean, p.fs, p.max_gap)?;
+    if let Some(g) = u.gaps.first() {
+        return Err(Error(format!(
+            "A gap in the trace from {:.3} s to {:.3} s is longer than {} s.",
+            g.start, g.end, p.max_gap
+        )));
+    }
+    let selection = select(std::slice::from_ref(&u.values), p.fs, &p.welch, &p.band)?;
+    let best = selection.best().1.clone();
+    if best.excluded {
+        return Err(Error("The trace's rhythm is a harmonic of motion below the tapping band.".into()));
+    }
+    let cycles = analyse_at(&u.values, p.fs, u.t0, best.f0_hz, best.timing_harmonic(), &p.phase)?;
+    Ok(TraceResult { t0: u.t0, f0_hz: best.f0_hz, case: best.case, periodicity: best, cycles, signal: u.values })
 }

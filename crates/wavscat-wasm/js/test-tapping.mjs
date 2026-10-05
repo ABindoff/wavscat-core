@@ -76,3 +76,34 @@ test("reset starts a new trial, and bad input is refused", () => {
   assert.throws(() => session.pushFrame(frame, 160, 160, 120, 1000), /does not follow/);
   assert.throws(() => new w.TappingSession({ capacty: 10 }), /unknown field/);
 });
+
+test("diagnose explains a rejected trial, and a landmark-like trace matches the video", () => {
+  const session = new w.TappingSession();
+  const video = capture(session, { iti_sd: 0.01, distractor_hz: 4.5 }, false);
+  const d = session.diagnose();
+  assert.equal(d.report.accepted, false);
+  const a = d.analysis;
+  assert.equal(a.loading.length, a.grid_width * a.grid_height);
+  assert.equal(a.signal.length > 800, true);
+  assert.equal(a.features.names[0], "f0_hz", a.features_error);
+  assert.equal(d.timestamps.length, session.frames);
+
+  // A trace that rises and falls once per true tap, as a fingertip
+  // distance does, sampled at the frame times.
+  const taps = video.taps();
+  const phase = (t) => {
+    let k = taps.findIndex((x) => x > t);
+    if (k <= 0) return NaN;
+    return k - 1 + (t - taps[k - 1]) / (taps[k] - taps[k - 1]);
+  };
+  const times = [], values = [];
+  for (const t of d.timestamps) {
+    const p = phase(t + d.timestamps[0]);
+    if (Number.isFinite(p)) { times.push(t); values.push(2 + Math.cos(2 * Math.PI * p)); }
+  }
+  const r = w.analyseTrace(new Float64Array(times), new Float64Array(values));
+  assert.ok(Math.abs(r.f0_hz - 3) < 0.06, `trace f0 ${r.f0_hz}`);
+  assert.equal(r.features.names.length, a.features.names.length);
+  assert.match(r.params_hash, /^[0-9a-f]{16}$/);
+  assert.throws(() => w.analyseTrace(new Float64Array([0, 1]), new Float64Array([1])), /one timestamp per value/);
+});

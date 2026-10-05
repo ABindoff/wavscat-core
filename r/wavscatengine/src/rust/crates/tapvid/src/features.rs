@@ -30,7 +30,8 @@ use wavscat_core::features::log_compress;
 use wavscat_core::jtfs::{ParamsJtfs, ScatteringJtfs};
 use wavscat_core::Error;
 
-use crate::pipeline::{PipelineParams, TrialResult};
+use crate::phase::ItiSummary;
+use crate::pipeline::{PipelineParams, TraceResult, TrialResult};
 use crate::qc::QcParams;
 
 /// Version of the feature definitions: names, order and meaning. Bumped
@@ -132,10 +133,32 @@ pub fn trial_features(
     qc: &QcParams,
     p: &FeatureParams,
 ) -> Result<Features, Error> {
-    let s = &r.cycles.summary;
+    features_of(r.f0_hz, &r.cycles.summary, &r.signal, pipeline, qc, p)
+}
+
+/// The same feature vector for a trace analysed by
+/// [`analyse_trace`](crate::pipeline::analyse_trace), such as a landmark
+/// distance, so that it can be compared feature by feature with the video's.
+pub fn trace_features(
+    r: &TraceResult,
+    pipeline: &PipelineParams,
+    qc: &QcParams,
+    p: &FeatureParams,
+) -> Result<Features, Error> {
+    features_of(r.f0_hz, &r.cycles.summary, &r.signal, pipeline, qc, p)
+}
+
+fn features_of(
+    f0_hz: f64,
+    s: &ItiSummary,
+    signal: &[f64],
+    pipeline: &PipelineParams,
+    qc: &QcParams,
+    p: &FeatureParams,
+) -> Result<Features, Error> {
     let mut names: Vec<String> = ITI_FEATURES.iter().map(|n| n.to_string()).collect();
     let mut values = vec![
-        r.f0_hz,
+        f0_hz,
         s.mean,
         s.sd,
         s.cv,
@@ -146,7 +169,7 @@ pub fn trial_features(
         s.relative_amplitude_slope,
         s.phase_diffusion,
     ];
-    let (jn, jv) = jtfs_features(&r.signal, pipeline.fs, p)?;
+    let (jn, jv) = jtfs_features(signal, pipeline.fs, p)?;
     names.extend(jn);
     values.extend(jv);
     Ok(Features {

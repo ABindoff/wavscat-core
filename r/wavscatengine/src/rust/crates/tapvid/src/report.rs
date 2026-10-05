@@ -7,7 +7,7 @@ use wavscat_core::Error;
 use crate::features::{trial_features, FeatureParams};
 use crate::ingest::Ingest;
 use crate::pipeline::PipelineParams;
-use crate::qc::{run_trial, QcParams};
+use crate::qc::{run_trial, QcParams, TrialOutput};
 use crate::select::F0Case;
 
 /// QC measurements; `None` where the analysis did not get that far.
@@ -61,7 +61,11 @@ pub struct TrialReport {
 
 /// Analyse, gate and featurise the trial held by `ing`.
 pub fn trial_report(ing: &Ingest, p: &PipelineParams, q: &QcParams, f: &FeatureParams) -> Result<TrialReport, Error> {
-    let out = run_trial(ing, p, q);
+    report_of(&run_trial(ing, p, q), p, q, f)
+}
+
+/// The report of a trial already run with these parameters.
+pub fn report_of(out: &TrialOutput, p: &PipelineParams, q: &QcParams, f: &FeatureParams) -> Result<TrialReport, Error> {
     let qc = &out.qc;
     let mut report = TrialReport {
         accepted: qc.accepted(),

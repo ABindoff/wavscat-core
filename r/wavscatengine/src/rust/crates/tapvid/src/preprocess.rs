@@ -89,6 +89,83 @@ fn cubic_bspline(u: f64) -> f64 {
     }
 }
 
+/// The orthonormalised basis in time whose span is removed: cubic B-splines
+/// on uniform knots below `cutoff` Hz, or the constant alone. Frames by `k`,
+/// row-major.
+fn drift_basis(timestamps: &[f64], cutoff: Option<f64>) -> Result<(Vec<f64>, usize), Error> {
+    let t_len = timestamps.len();
+    let (mut basis, k) = match cutoff {
+        Some(fc) if fc > 0.0 => {
+            let (a, b) = (timestamps[0], timestamps[t_len - 1]);
+            let n_int = knot_intervals(b - a, fc);
+            let delta = (b - a) / n_int as f64;
+            let k = n_int + 3;
+            let mut phi = vec![0.0; t_len * k];
+            for (r, &t) in timestamps.iter().enumerate() {
+                let x = (t - a) / delta;
+                for i in 0..k {
+                    phi[r * k + i] = cubic_bspline(x - (i as f64 - 3.0));
+                }
+            }
+            (phi, k)
+        }
+        Some(_) => return Err(Error("detrend_cutoff must be positive.".into())),
+        None => (vec![1.0; t_len], 1),
+    };
+    orthonormalise(&mut basis, t_len, k);
+    Ok((basis, k))
+}
+
+/// `v = (I - H) v` for `v` of size `t_len` by `kk`, row-major: subtract the
+/// projection onto the orthonormal `basis` (`t_len` by `k`), `Q (Q^T v)`.
+fn project_out(basis: &[f64], k: usize, v: &mut [f64], t_len: usize, kk: usize) {
+    let mut coef = vec![0.0; k * kk];
+    for r in 0..t_len {
+        for b in 0..k {
+            let q = basis[r * k + b];
+            if q != 0.0 {
+                for c in 0..kk {
+                    coef[b * kk + c] += q * v[r * kk + c];
+                }
+            }
+        }
+    }
+    for r in 0..t_len {
+        for b in 0..k {
+            let q = basis[r * k + b];
+            if q != 0.0 {
+                for c in 0..kk {
+                    v[r * kk + c] -= q * coef[b * kk + c];
+                }
+            }
+        }
+    }
+}
+
+/// Centre a single series captured at `timestamps` seconds and remove its
+/// drift below `cutoff` Hz, exactly as [`preprocess`] treats each pixel, for
+/// a trace that did not come from frames (a landmark distance, say). No
+/// gain is removed: a trace has no exposure.
+pub fn detrend(timestamps: &[f64], values: &[f64], cutoff: Option<f64>) -> Result<Vec<f64>, Error> {
+    let t_len = timestamps.len();
+    if values.len() != t_len {
+        return Err(Error("There must be one timestamp per value.".into()));
+    }
+    if t_len < 3 {
+        return Err(Error("At least three values are needed.".into()));
+    }
+    if timestamps.windows(2).any(|w| !(w[1] > w[0])) {
+        return Err(Error("Timestamps must be strictly increasing.".into()));
+    }
+    if values.iter().any(|v| !v.is_finite()) {
+        return Err(Error("The trace contains non-finite values.".into()));
+    }
+    let (basis, k) = drift_basis(timestamps, cutoff)?;
+    let mut v = values.to_vec();
+    project_out(&basis, k, &mut v, t_len, 1);
+    Ok(v)
+}
+
 /// Wrap `src` (frames by pixels, captured at `timestamps` seconds) as the
 /// preprocessed operator, and summarise its exposure trace.
 pub fn preprocess<'a, S: RowSource>(
@@ -131,56 +208,14 @@ pub fn preprocess<'a, S: RowSource>(
         trace,
     };
 
-    // Basis in time: cubic B-splines on uniform knots, or the constant.
-    let (basis, k) = match p.detrend_cutoff {
-        Some(fc) if fc > 0.0 => {
-            let (a, b) = (timestamps[0], timestamps[t_len - 1]);
-            let n_int = knot_intervals(b - a, fc);
-            let delta = (b - a) / n_int as f64;
-            let k = n_int + 3;
-            let mut phi = vec![0.0; t_len * k];
-            for (r, &t) in timestamps.iter().enumerate() {
-                let x = (t - a) / delta;
-                for i in 0..k {
-                    phi[r * k + i] = cubic_bspline(x - (i as f64 - 3.0));
-                }
-            }
-            (phi, k)
-        }
-        Some(_) => return Err(Error("detrend_cutoff must be positive.".into())),
-        None => (vec![1.0; t_len], 1),
-    };
-    let mut basis = basis;
-    orthonormalise(&mut basis, t_len, k);
+    let (basis, k) = drift_basis(timestamps, p.detrend_cutoff)?;
     Ok((Preprocessed { src, inv_gain, basis, k }, qc))
 }
 
 impl<S: RowSource> Preprocessed<'_, S> {
-    /// `v = (I - H) v` for `v` of size frames by `kk`, row-major: subtract
-    /// the projection onto the basis, `Q (Q^T v)`.
+    /// `v = (I - H) v` for `v` of size frames by `kk`, row-major.
     fn project_out(&self, v: &mut [f64], kk: usize) {
-        let (t_len, k) = (self.src.n_rows(), self.k);
-        let mut coef = vec![0.0; k * kk];
-        for r in 0..t_len {
-            for b in 0..k {
-                let q = self.basis[r * k + b];
-                if q != 0.0 {
-                    for c in 0..kk {
-                        coef[b * kk + c] += q * v[r * kk + c];
-                    }
-                }
-            }
-        }
-        for r in 0..t_len {
-            for b in 0..k {
-                let q = self.basis[r * k + b];
-                if q != 0.0 {
-                    for c in 0..kk {
-                        v[r * kk + c] -= q * coef[b * kk + c];
-                    }
-                }
-            }
-        }
+        project_out(&self.basis, self.k, v, self.src.n_rows(), kk);
     }
 
     /// The exposure gain removed from frame `r`, as `1 / mean luminance`.
