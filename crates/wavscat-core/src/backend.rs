@@ -81,6 +81,41 @@ pub(crate) fn filter_periodize(a: &[C64], f: &[f64], k: usize) -> Vec<C64> {
         .collect()
 }
 
+/// [`filter_periodize`] applied to every column of a row-major matrix with
+/// `cols` columns, as the frequential axis of joint scattering needs.
+///
+/// Row `i` of the result accumulates rows `i, m + i, 2m + i, ...` in that
+/// order, so each column sees exactly the arithmetic of [`filter_periodize`].
+pub(crate) fn filter_periodize_rows(a: &[C64], cols: usize, f: &[f64], k: usize) -> Vec<C64> {
+    let n = f.len();
+    assert_eq!(a.len(), n * cols);
+    assert_eq!(n % k.max(1), 0, "cannot periodise {} rows by {}", n, k);
+    let k = k.max(1);
+    let m = n / k;
+    let kf = k as f64;
+    let mut out = vec![C64::ZERO; m * cols];
+    for i in 0..m {
+        let acc = &mut out[i * cols..(i + 1) * cols];
+        let h = f[i];
+        for (o, v) in acc.iter_mut().zip(&a[i * cols..(i + 1) * cols]) {
+            *o = v.scale(h);
+        }
+        for b in 1..k {
+            let t = b * m + i;
+            let h = f[t];
+            for (o, v) in acc.iter_mut().zip(&a[t * cols..(t + 1) * cols]) {
+                *o = *o + v.scale(h);
+            }
+        }
+        if k > 1 {
+            for o in acc.iter_mut() {
+                *o = o.unscale(kf);
+            }
+        }
+    }
+    out
+}
+
 /// Pointwise product of a spectrum with a real filter.
 pub(crate) fn cdgmm(a: &[C64], f: &[f64]) -> Vec<C64> {
     debug_assert_eq!(a.len(), f.len());
@@ -118,6 +153,27 @@ mod tests {
             assert_eq!(got.len(), want.len());
             for (g, w) in got.iter().zip(&want) {
                 assert!(g.re.to_bits() == w.re.to_bits() && g.im.to_bits() == w.im.to_bits(), "k = {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn row_wise_filter_periodize_matches_each_column() {
+        let (n, cols) = (152, 5);
+        let a: Vec<C64> = (0..n * cols)
+            .map(|i| C64::new(((i * 37) % 101) as f64 / 7.0 - 3.0, ((i * 53) % 97) as f64 / 11.0))
+            .collect();
+        let f: Vec<f64> = (0..n).map(|i| ((i * 29) % 89) as f64 / 13.0 - 1.5).collect();
+        for k in [1, 2, 4, 8] {
+            let got = filter_periodize_rows(&a, cols, &f, k);
+            for c in 0..cols {
+                let col: Vec<C64> = (0..n).map(|r| a[r * cols + c]).collect();
+                let want = filter_periodize(&col, &f, k);
+                for (r, w) in want.iter().enumerate() {
+                    let g = got[r * cols + c];
+                    assert!(g.re.to_bits() == w.re.to_bits() && g.im.to_bits() == w.im.to_bits(),
+                            "k = {k}, column {c}, row {r}");
+                }
             }
         }
     }

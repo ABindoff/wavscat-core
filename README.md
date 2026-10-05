@@ -24,9 +24,9 @@ at the operator's rate.
 
 ## Verification
 
-- `tests/kymatio_parity.rs` checks agreement with Kymatio, using the reference
-  values from the R package, at the R package's tolerances. Observed relative
-  errors are between 7e-16 and 6e-14.
+- `tests/kymatio_parity.rs` and `tests/kymatio_parity_jtfs.rs` check agreement
+  with Kymatio, using the reference values from the R package, at the R
+  package's tolerances. Observed relative errors are between 3e-16 and 6e-14.
 - `tests/golden.rs` hashes the exact output bits of a fixed set of transforms
   and feature pipelines, and compares them with `golden/numerics-<version>.tsv`.
   CI runs it on every target. To run it locally as wasm under Node:
@@ -47,7 +47,10 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
       no averaging), feature post-processing
 - [x] Faster FFT: cache-blocked radix-2, real-input transforms, fused filter-and-subsample
 - [ ] Optional before freezing: radix-4 butterflies (fewer multiplications, different rounding)
-- [ ] Joint time-frequency scattering
+- [x] Joint time-frequency scattering (both formats; local, global and no
+      averaging in time and frequency)
+- [x] Mixed-radix FFT with paired prime DFTs, and batched column transforms
+      for the frequential axis
 - [ ] wasm-bindgen binding, and CI across targets and browsers
 - [ ] R binding through extendr; Python binding through PyO3
 

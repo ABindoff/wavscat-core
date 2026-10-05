@@ -26,6 +26,7 @@ pub mod error;
 pub mod features;
 pub mod fft;
 pub mod filter_bank;
+pub mod jtfs;
 pub mod math;
 pub mod pad;
 pub mod scattering1d;

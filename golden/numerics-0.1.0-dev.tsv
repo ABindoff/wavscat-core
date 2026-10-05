@@ -17,3 +17,11 @@ strided-4096-J7	Sd	5740cc9772361002
 strided-4096-J7	Median	bce8ff53aabcf6e6
 strided-4096-J7	Max	6ca315bc6929bd09
 order1-3000-J6-Q12	coefs	0aef874d50913e0f
+jtfs-time-4096-J6	shape	7545de71a8e6f825
+jtfs-time-4096-J6	coefs	fc42a3572f2ec67a
+jtfs-joint-4096-J6	shape	ee0bf57ea79e8a20
+jtfs-joint-4096-J6	coefs	e7a111c129bc7be7
+jtfs-F0-4096-J6	shape	5701466f0237c468
+jtfs-F0-4096-J6	coefs	cd58997ef232408f
+jtfs-speech-16000-J10	shape	ee0735a1b3ac3f89
+jtfs-speech-16000-J10	coefs	f1044cea985d1b29

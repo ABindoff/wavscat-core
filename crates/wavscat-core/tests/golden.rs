@@ -15,6 +15,7 @@ use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use wavscat_core::features::{self, Summary};
+use wavscat_core::jtfs::{Format, OutType, ParamsJtfs, ScatteringJtfs};
 use wavscat_core::scattering1d::{Averaging, Params1d, Scattering1d, TSpec};
 use wavscat_core::NUMERICS_VERSION;
 
@@ -99,7 +100,37 @@ fn compute() -> String {
             writeln!(out, "{}\t{:?}\t{:016x}", c.name, how, hash(s)).unwrap();
         }
     }
+
+    // Joint time-frequency scattering. The frequential axis of these
+    // operators has 120 and 152 rows, so the mixed-radix and paired prime
+    // DFT paths are covered as well as the power-of-two ones.
+    for (name, p, seed) in jtfs_cases() {
+        let op = ScatteringJtfs::new(&p).unwrap();
+        let x = signal(p.time.n, seed);
+        let coefs = op.transform(&x).unwrap();
+        let shape = coefs.iter().flat_map(|m| [m.rows as f64, m.cols as f64]);
+        writeln!(out, "{name}\tshape\t{:016x}", hash(shape)).unwrap();
+        writeln!(out, "{name}\tcoefs\t{:016x}", hash(coefs.iter().flat_map(|m| m.data.iter().copied()))).unwrap();
+    }
     out
+}
+
+fn jtfs_cases() -> Vec<(&'static str, ParamsJtfs, u64)> {
+    let mut time = ParamsJtfs::new(4096, 6, vec![8]);
+    time.j_fr = 3;
+    let mut joint = ParamsJtfs::new(4096, 6, vec![8]);
+    joint.format = Format::Joint;
+    joint.out_type = OutType::List;
+    let mut unaveraged_fr = ParamsJtfs::new(4096, 6, vec![8]);
+    unaveraged_fr.f = TSpec::Samples(0.0);
+    let mut speech = ParamsJtfs::new(16000, 10, vec![8]);
+    speech.j_fr = 3;
+    vec![
+        ("jtfs-time-4096-J6", time, 7),
+        ("jtfs-joint-4096-J6", joint, 8),
+        ("jtfs-F0-4096-J6", unaveraged_fr, 9),
+        ("jtfs-speech-16000-J10", speech, 10),
+    ]
 }
 
 #[test]
