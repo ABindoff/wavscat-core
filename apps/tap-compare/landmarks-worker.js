@@ -1,6 +1,7 @@
-// MediaPipe Hands in a worker, so that hand detection never delays frame
-// capture. The page sends each captured frame as an ImageBitmap, with its
-// capture time; the worker answers with the landmarks, in the same order.
+// MediaPipe Hands in a worker. The page sends frames, as VideoFrames or
+// ImageBitmaps, with their times: preview frames for the live overlay, and
+// after a trial every recorded frame. The worker answers with the
+// landmarks, in the same order.
 
 // MediaPipe loads its wasm glue with importScripts, which a module worker
 // does not have. Workers may fetch synchronously, so do that and evaluate
@@ -59,22 +60,40 @@ const ready = setup().then(
   (e) => self.postMessage({ type: "error", message: String(e?.message ?? e) }),
 );
 
-self.onmessage = async ({ data }) => {
+// Frames are handled strictly in order, one at a time.
+let queue = ready;
+let lastT = -Infinity;
+
+self.onmessage = ({ data }) => {
   if (data.type !== "frame") return;
-  await ready;
+  // A frame that fails still gets an answer, so the page's count of frames
+  // in flight stays right and later frames are not held up.
+  queue = queue.then(() => detect(data)).catch((e) => {
+    self.postMessage({ type: "landmarks", id: data.id, ms: 0, landmarks: [], handedness: [], error: String(e?.message ?? e) });
+  });
+};
+
+async function detect({ id, tMs, source, width, height }) {
   const start = performance.now();
   let res = { landmarks: [], handedness: [] };
+  let bitmap = null;
   try {
-    res = landmarker.detectForVideo(data.bitmap, data.tMs);
+    // A VideoFrame or ImageBitmap from the page, scaled to MediaPipe's size.
+    bitmap = await createImageBitmap(source, { resizeWidth: width, resizeHeight: height, resizeQuality: "high" });
+    // Video mode needs strictly increasing times.
+    const t = Math.max(tMs, lastT + 1);
+    lastT = t;
+    res = landmarker.detectForVideo(bitmap, t);
   } finally {
-    data.bitmap.close();
+    source.close();
+    bitmap?.close();
   }
   self.postMessage({
     type: "landmarks",
-    id: data.id,
+    id,
     ms: performance.now() - start,
     // Plain arrays of { x, y } in 0-1 image coordinates; z is not used.
     landmarks: res.landmarks.map((lm) => lm.map((p) => ({ x: p.x, y: p.y }))),
     handedness: res.handedness.map((h) => [{ categoryName: h[0]?.categoryName ?? "", score: h[0]?.score ?? 0 }]),
   });
-};
+}

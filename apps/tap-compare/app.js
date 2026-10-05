@@ -1,19 +1,26 @@
 // Webcam tapping: the landmark-free video pipeline (tapvid, through wasm)
 // against MediaPipe hand landmarks, on the same frames.
 //
-// Every captured frame goes to a TappingSession at once, and a snapshot of
-// the same pixels goes to MediaPipe Hands in a worker, with one timestamp;
-// hand detection never delays capture. After a trial, each hand's landmark
-// trace is analysed by analyseTrace, which runs it through the same drift
-// removal, resampling, fundamental, cycle timing and features as the video's
-// selected component, so the two are compared like for like.
+// A trial is recorded first and analysed afterwards. During recording the
+// page only copies each camera frame, in the camera's own pixel format, with
+// the camera's capture time; nothing else competes with the camera. After
+// recording, the same frames and timestamps go to a TappingSession and, one
+// by one, to MediaPipe Hands in a worker. Each hand's landmark trace is then
+// analysed by analyseTrace, which runs it through the same drift removal,
+// resampling, fundamental, cycle timing and features as the video's selected
+// component, so the two are compared like for like.
+//
+// The tapping pipeline gives the same result whether frames are pushed live
+// or afterwards; only the pixels and timestamps matter. Recording does break
+// the production rule that no raw frame is kept: here, about 140 MB of raw
+// frames stays in this tab's memory until the trial is analysed, and is then
+// dropped. Nothing leaves the browser.
 import init, { TappingSession, analyseTrace, verify } from "../../crates/wavscat-wasm/pkg-web/wavscat_wasm.js";
 
 const RECORD_SEC = 10;
 const COUNTDOWN_SEC = 3;
-// Frames the landmark worker may fall behind by before frames are sent to it
-// no more; those frames get no landmarks, and the video keeps every frame.
-const MAX_PENDING = 15;
+// Frames in flight to the landmark worker during processing.
+const IN_FLIGHT = 4;
 // Preview frames hand tracking must process before Record is enabled.
 const WARMUP_FRAMES = 30;
 
@@ -42,6 +49,8 @@ const TRIALS = [
 const WRIST = 0, THUMB_TIP = 4, INDEX_MCP = 5, INDEX_TIP = 8, MIDDLE_MCP = 9;
 const HAND_EDGES = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
   [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [17, 18], [18, 19], [19, 20], [0, 17]];
+// Pixel formats whose first plane is luma.
+const YUV = new Set(["I420", "I420A", "I422", "I444", "NV12"]);
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -49,28 +58,30 @@ const COLOURS = { video: () => css("--video"), left: () => css("--left"), right:
 
 const state = {
   trialIndex: 0,
-  phase: "idle", // idle | preview | countdown | recording | draining | analysing
+  phase: "idle", // idle | preview | countdown | recording | processing | analysing
   worker: null,
   delegate: null,
   session: null,
-  canvas: null,
-  ctx: null,
+  // Raw frames of the trial being recorded: { us, buf, layout, format, w, h }.
+  recording: [],
+  // Where frame times come from: "capture" (VideoFrame.timestamp), or a
+  // video-frame-callback field when the browser lacks MediaStreamTrackProcessor.
+  timeSource: null,
   // { us, id, hands: null until the worker answers, then [{ x, y, label, score }] }
   frames: [],
   byId: new Map(),
-  nextId: 0,
   pending: 0,
   skipped: 0,
   previewSeen: 0,
   // Options, read from the page when a trial starts.
-  tracking: true, // send frames to MediaPipe at all
+  tracking: true, // run MediaPipe at all
   mpScale: 0.5, // MediaPipe input size, as a fraction of the camera frame
-  mpCanvas: null,
-  mpCtx: null,
+  mpSize: null,
+  canvas: null, // for the fallback capture path only
+  ctx: null,
   detectMs: [],
   firstUs: null,
   lastUs: null,
-  lastMs: -1,
   phaseStart: 0,
   results: {},
   camera: null,
@@ -116,130 +127,148 @@ async function startCamera() {
   const video = $("video");
   video.srcObject = stream;
   await video.play();
-  const s = stream.getVideoTracks()[0].getSettings();
-  state.camera = { width: video.videoWidth, height: video.videoHeight, frameRate: s.frameRate ?? null, label: stream.getVideoTracks()[0].label };
-  state.canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
-  state.ctx = state.canvas.getContext("2d", { willReadFrequently: true });
-  sizeMediapipeCanvas();
+  const track = stream.getVideoTracks()[0];
+  const s = track.getSettings();
+  state.camera = { width: video.videoWidth, height: video.videoHeight, frameRate: s.frameRate ?? null, label: track.label };
   const overlay = $("overlay");
   overlay.width = video.videoWidth;
   overlay.height = video.videoHeight;
   state.phase = "preview";
   readOptions();
+  const cam = `Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}`;
+  if ("MediaStreamTrackProcessor" in window) {
+    // The preview element and the processor share the one track.
+    state.timeSource = "capture";
+    const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    pumpFrames(reader).catch((e) => status(`Capture failed: ${e.message}`));
+  } else {
+    state.canvas = new OffscreenCanvas(video.videoWidth, video.videoHeight);
+    state.ctx = state.canvas.getContext("2d", { willReadFrequently: true });
+    scheduleFallbackFrame();
+  }
+  const clock = state.timeSource === "capture" ? "camera capture times" : "video-frame callback times (no MediaStreamTrackProcessor here)";
   if (state.tracking) {
-    status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Warming up hand tracking…`);
+    status(`${cam}, ${clock}. Warming up hand tracking…`);
   } else {
     $("record").disabled = false;
-    status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Hand tracking is off. Ready to record.`);
+    status(`${cam}, ${clock}. Hand tracking is off. Ready to record.`);
   }
-  scheduleFrame();
 }
 
 // ---------------------------------------------------------------- capture
 
-function scheduleFrame() {
-  const video = $("video");
-  if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
-    video.requestVideoFrameCallback((now, meta) => {
-      onFrame(meta.captureTime ?? meta.presentationTime ?? now);
-      scheduleFrame();
-    });
-  } else {
-    // Without frame callbacks, poll and take a new frame when the video's
-    // time moves on.
-    let last = -1;
-    const poll = (now) => {
-      if (video.currentTime !== last) {
-        last = video.currentTime;
-        onFrame(now);
-      }
-      requestAnimationFrame(poll);
-    };
-    requestAnimationFrame(poll);
-  }
-}
-
-/// The canvas MediaPipe's frames are drawn into, at `mpScale` of the camera
-/// frame. Landmarks are in 0-1 image coordinates, so the scale changes their
-/// precision but not their meaning.
-function sizeMediapipeCanvas() {
-  const w = Math.max(1, Math.round(state.camera.width * state.mpScale));
-  const h = Math.max(1, Math.round(state.camera.height * state.mpScale));
-  if (state.mpCanvas?.width === w && state.mpCanvas?.height === h) return;
-  state.mpCanvas = new OffscreenCanvas(w, h);
-  state.mpCtx = state.mpCanvas.getContext("2d");
-}
-
-/// Draw the current video frame, at MediaPipe's size, and send it to the
-/// landmark worker. The bitmap is transferred, not copied.
-function sendToWorker(id, tMs) {
-  const video = $("video");
-  state.mpCtx.drawImage(video, 0, 0, state.mpCanvas.width, state.mpCanvas.height);
-  const bitmap = state.mpCanvas.transferToImageBitmap();
-  state.pending += 1;
-  state.worker.postMessage({ type: "frame", id, tMs, bitmap }, [bitmap]);
-}
-
-function onFrame(tMs) {
-  const video = $("video");
-  if (tMs <= state.lastMs) return;
-  state.lastMs = tMs;
-  const { width, height } = state.canvas;
-
-  if (state.phase !== "recording") {
-    // Preview and countdown: landmarks only, for the overlay, and only when
-    // the worker is idle so that no backlog builds before recording.
-    if (state.tracking && state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
-      sendToWorker(-1, tMs);
-    }
-    if (state.phase === "countdown") {
-      const elapsed = (performance.now() - state.phaseStart) / 1000;
-      $("big").textContent = String(Math.max(1, Math.ceil(COUNTDOWN_SEC - elapsed)));
-      if (elapsed >= COUNTDOWN_SEC) {
-        state.phase = "recording";
-        state.phaseStart = performance.now();
-        $("big").textContent = "";
-      }
-    }
-    return;
-  }
-
-  const us = Math.round(tMs * 1000);
-  if (state.lastUs !== null && us <= state.lastUs) return;
-  state.ctx.drawImage(video, 0, 0, width, height);
-  const img = state.ctx.getImageData(0, 0, width, height);
-  state.session.pushRgba(img.data, width * 4, width, height, us);
-  img.data.fill(0);
-  if (state.firstUs === null) state.firstUs = us;
-  state.lastUs = us;
-  const frame = { us, id: state.nextId++, hands: null };
-  state.frames.push(frame);
-  if (!state.tracking) {
-    // Video only: no frame goes to MediaPipe.
-  } else if (state.pending < MAX_PENDING) {
-    state.byId.set(frame.id, frame);
-    sendToWorker(frame.id, tMs);
-  } else {
-    state.skipped += 1;
-  }
-
+/// The countdown before recording, driven by whichever frames arrive.
+function tickCountdown() {
+  if (state.phase !== "countdown") return;
   const elapsed = (performance.now() - state.phaseStart) / 1000;
+  $("big").textContent = String(Math.max(1, Math.ceil(COUNTDOWN_SEC - elapsed)));
+  if (elapsed >= COUNTDOWN_SEC) {
+    state.phase = "recording";
+    $("big").textContent = "";
+  }
+}
+
+/// Keep a frame captured at `us` microseconds; end the recording once
+/// RECORD_SEC seconds of camera time have been kept.
+function keep(rec) {
+  if (state.firstUs === null) state.firstUs = rec.us;
+  state.lastUs = rec.us;
+  state.recording.push(rec);
+  const elapsed = (rec.us - state.firstUs) / 1e6;
   $("progress").style.width = `${Math.min(100, (100 * elapsed) / RECORD_SEC)}%`;
   if (elapsed >= RECORD_SEC) {
-    state.phase = "draining";
-    $("progress").style.width = "100%";
-    status("Waiting for the last landmarks…");
-    drain();
+    state.phase = "processing";
+    setTimeout(processRecording, 0);
   }
+}
+
+/// MediaStreamTrackProcessor: every camera frame, with its capture time.
+async function pumpFrames(reader) {
+  for (;;) {
+    const { value: frame, done } = await reader.read();
+    if (done) return;
+    tickCountdown();
+    const us = frame.timestamp;
+    if (state.phase === "recording" && (state.lastUs === null || us > state.lastUs)) {
+      // Copy in the camera's own format and release the frame at once: a
+      // held frame starves the camera of buffers.
+      const buf = new ArrayBuffer(frame.allocationSize());
+      const layout = await frame.copyTo(buf);
+      const { width: w, height: h } = frame.visibleRect;
+      const format = frame.format;
+      frame.close();
+      keep({ us, buf, layout, format, w, h });
+    } else if (state.tracking && state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
+      sendToWorker(-1, performance.now(), frame);
+    } else {
+      frame.close();
+    }
+  }
+}
+
+/// Without MediaStreamTrackProcessor: frames from the video element, timed by
+/// the best clock its callback offers.
+function scheduleFallbackFrame() {
+  const video = $("video");
+  video.requestVideoFrameCallback((now, meta) => {
+    let ms;
+    if (meta.captureTime !== undefined) {
+      ms = meta.captureTime;
+      state.timeSource = "captureTime";
+    } else if (meta.mediaTime !== undefined) {
+      ms = 1000 * meta.mediaTime;
+      state.timeSource = "mediaTime";
+    } else {
+      ms = meta.presentationTime ?? now;
+      state.timeSource = "presentationTime";
+    }
+    onFallbackFrame(Math.round(ms * 1000));
+    scheduleFallbackFrame();
+  });
+}
+
+function onFallbackFrame(us) {
+  const video = $("video");
+  tickCountdown();
+  if (state.phase === "recording" && (state.lastUs === null || us > state.lastUs)) {
+    const { width: w, height: h } = state.canvas;
+    state.ctx.drawImage(video, 0, 0, w, h);
+    const img = state.ctx.getImageData(0, 0, w, h);
+    keep({ us, buf: img.data.buffer, layout: [{ offset: 0, stride: 4 * w }], format: "RGBA", w, h });
+  } else if (state.tracking && state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
+    // Count the frame as pending now, so no second one is started meanwhile.
+    state.pending += 1;
+    createImageBitmap(video).then((bitmap) => {
+      state.pending -= 1;
+      sendToWorker(-1, performance.now(), bitmap);
+    });
+  }
+}
+
+/// MediaPipe's input size, at `mpScale` of the camera frame. Landmarks are in
+/// 0-1 image coordinates, so the scale changes their precision but not their
+/// meaning.
+function sizeMediapipe() {
+  state.mpSize = {
+    width: Math.max(1, Math.round(state.camera.width * state.mpScale)),
+    height: Math.max(1, Math.round(state.camera.height * state.mpScale)),
+  };
+}
+
+/// Send a VideoFrame or ImageBitmap to the landmark worker, which scales it
+/// to MediaPipe's size. The source is transferred, and closed by the worker.
+function sendToWorker(id, tMs, source) {
+  state.pending += 1;
+  state.worker.postMessage({ type: "frame", id, tMs, source, width: state.mpSize.width, height: state.mpSize.height }, [source]);
 }
 
 function onLandmarks(data) {
   if (data.type !== "landmarks") return;
   state.pending -= 1;
-  drawHands(data);
   if (data.id < 0) {
+    if (state.phase === "preview" || state.phase === "countdown") drawHands(data);
     // Record becomes available once hand tracking has run steadily on the
-    // preview for a while: its first frames can stall the camera.
+    // preview for a while.
     state.previewSeen += 1;
     if (state.previewSeen === WARMUP_FRAMES && state.phase === "preview" && $("record").disabled) {
       $("record").disabled = false;
@@ -259,19 +288,66 @@ function onLandmarks(data) {
   }));
 }
 
-/// Analyse once the worker has answered for every frame sent to it.
-function drain() {
-  const start = performance.now();
-  const wait = () => {
-    if (state.byId.size === 0 || performance.now() - start > 10000) {
-      state.phase = "analysing";
-      status("Analysing…");
-      setTimeout(analyse, 0);
-    } else {
-      setTimeout(wait, 20);
+// ---------------------------------------------------------------- processing
+
+/// Push a recorded frame to the tapping session: the luma plane of a YUV
+/// frame, or the pixels of an RGB one.
+function pushToSession(session, r) {
+  const plane = r.layout[0];
+  const bytes = new Uint8Array(r.buf, plane.offset);
+  if (YUV.has(r.format)) {
+    session.pushFrame(bytes, plane.stride, r.w, r.h, r.us);
+  } else if (r.format === "RGBA" || r.format === "RGBX") {
+    session.pushRgba(bytes, plane.stride, r.w, r.h, r.us);
+  } else if (r.format === "BGRA" || r.format === "BGRX") {
+    const rgba = new Uint8Array(plane.stride * r.h);
+    for (let i = 0; i + 3 < rgba.length && i + 3 < bytes.length; i += 4) {
+      rgba[i] = bytes[i + 2];
+      rgba[i + 1] = bytes[i + 1];
+      rgba[i + 2] = bytes[i];
+      rgba[i + 3] = 255;
     }
-  };
-  wait();
+    session.pushRgba(rgba, plane.stride, r.w, r.h, r.us);
+  } else {
+    throw new Error(`Unsupported camera pixel format ${r.format}.`);
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function processRecording() {
+  const rec = state.recording;
+  $("progress").style.width = "100%";
+  state.frameFormat = rec[0]?.format ?? null;
+  status(`Recorded ${rec.length} frames (${state.frameFormat}). Running the tapping pipeline…`);
+  await sleep(0);
+  state.session?.free();
+  state.session = new TappingSession();
+  for (const r of rec) pushToSession(state.session, r);
+
+  state.frames = rec.map((r, id) => ({ us: r.us, id, hands: null }));
+  state.byId = new Map();
+  state.detectMs = [];
+  if (state.tracking) {
+    // MediaPipe's video mode needs increasing times: give it the recording's
+    // own intervals, after everything the preview sent.
+    const base = performance.now() + 1000;
+    for (let i = 0; i < rec.length; i++) {
+      while (state.pending >= IN_FLIGHT) await sleep(2);
+      const r = rec[i];
+      const frame = new VideoFrame(r.buf, { format: r.format, codedWidth: r.w, codedHeight: r.h, timestamp: r.us, layout: r.layout });
+      state.byId.set(i, state.frames[i]);
+      sendToWorker(i, base + (r.us - state.firstUs) / 1000, frame);
+      $("progress").style.width = `${(100 * (i + 1)) / rec.length}%`;
+      if (i % 10 === 0) status(`Hand tracking: frame ${i + 1} of ${rec.length}…`);
+    }
+    while (state.byId.size > 0) await sleep(5);
+  }
+  // The raw frames are no longer needed.
+  state.recording = [];
+  state.phase = "analysing";
+  status("Analysing…");
+  setTimeout(analyse, 0);
 }
 
 function drawHands(res) {
@@ -299,7 +375,7 @@ function drawHands(res) {
 function readOptions() {
   state.tracking = $("tracking").checked;
   state.mpScale = Number($("mpScale").value);
-  if (state.camera) sizeMediapipeCanvas();
+  if (state.camera) sizeMediapipe();
   $("mpScale").disabled = !state.tracking;
   if (!state.tracking) $("overlay").getContext("2d").clearRect(0, 0, $("overlay").width, $("overlay").height);
 }
@@ -312,8 +388,7 @@ function lockOptions(locked) {
 function startRecording() {
   readOptions();
   lockOptions(true);
-  state.session?.free();
-  state.session = new TappingSession();
+  state.recording = [];
   state.frames = [];
   state.byId.clear();
   state.skipped = 0;
@@ -322,6 +397,7 @@ function startRecording() {
   state.lastUs = null;
   state.phase = "countdown";
   state.phaseStart = performance.now();
+  $("overlay").getContext("2d").clearRect(0, 0, $("overlay").width, $("overlay").height);
   $("record").disabled = true;
   $("next").disabled = true;
   $("progress").style.width = "0";
@@ -553,7 +629,9 @@ function analyse() {
   state.results[key] = {
     trial: trial.id,
     hand_tracking: state.tracking,
-    mediapipe_input: state.tracking ? { width: state.mpCanvas.width, height: state.mpCanvas.height } : null,
+    mediapipe_input: state.tracking ? { ...state.mpSize } : null,
+    timestamp_source: state.timeSource,
+    frame_format: state.frameFormat,
     recorded: new Date().toISOString(),
     camera: state.camera,
     frames: n,
@@ -578,9 +656,10 @@ function analyse() {
   lockOptions(false);
   const missing = state.frames.filter((f) => !f.hands).length;
   const marks = state.tracking
-    ? `landmarks for ${n - missing}, median ${fmt(median(state.detectMs), 0)} ms each on ${state.delegate} at ${state.mpCanvas.width} x ${state.mpCanvas.height}`
+    ? `landmarks for ${n - missing}, median ${fmt(median(state.detectMs), 0)} ms each on ${state.delegate} at ${state.mpSize.width} x ${state.mpSize.height}`
     : "hand tracking off";
-  status(`Done: ${n} frames (${fmt(diag.report.qc.effective_fps, 1)} fps, ${fmt(100 * diag.report.qc.dropped_fraction, 0)}% dropped); ${marks}. Analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
+  const clock = state.timeSource === "capture" ? "camera capture times" : `${state.timeSource} times`;
+  status(`Done: ${n} frames, ${clock} (${fmt(diag.report.qc.effective_fps, 1)} fps, ${fmt(100 * diag.report.qc.dropped_fraction, 0)}% dropped); ${marks}. Analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
 }
 
 /// Mean image position (0–1) of the wrist, thumb tip and index tip.

@@ -134,8 +134,13 @@ support browsers from before 2023.
 
 `apps/tap-compare` is a page for validating the landmark-free pipeline on a
 real hand. It records three 10 s trials (left hand, right hand, and both hands
-tapping in anti-phase) and sends every frame both to a `TappingSession` and to
-MediaPipe Hands. Each hand's thumb–index aperture then goes through
+tapping in anti-phase), then sends the same frames, with the camera's capture
+times, both to a `TappingSession` and to MediaPipe Hands. Recording first
+keeps MediaPipe from costing the camera frames, and the capture times (from
+`MediaStreamTrackProcessor`) avoid the display-refresh jitter of
+video-element callbacks. Unlike the streaming session, this keeps about
+140 MB of raw frames in memory until the trial is analysed, so it is for
+validation only. Each hand's thumb–index aperture then goes through
 `analyseTrace`, which applies the same drift removal, resampling, cycle timing
 and features as the video's selected component. The page compares the two:
 the fundamental, waveform correlation, tap timing, inter-tap intervals and
