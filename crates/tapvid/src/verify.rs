@@ -16,6 +16,7 @@
 use std::fmt::Write as _;
 
 use crate::features::{trial_features, FeatureParams};
+use crate::clock::{regularise, ClockParams};
 use crate::ingest::{Ingest, IngestParams};
 use crate::locate::{locate, LocateParams};
 use crate::phase::{analyse, analyse_at, PhaseParams};
@@ -134,7 +135,7 @@ pub fn golden_report() -> String {
     let feats = trial_features(&trial, &PipelineParams::default(), &QcParams::default(), &fp).unwrap();
     writeln!(out, "video\tfeatures\t{:016x}", hash(feats.values.iter().copied())).unwrap();
     writeln!(out, "video\tparams_hash\t{}", feats.params_hash).unwrap();
-    let loc = locate(&ving, trial.f0_hz, &LocateParams::default()).unwrap();
+    let loc = locate(&ving, &trial.timestamps, trial.f0_hz, &LocateParams::default()).unwrap();
     let lf = loc
         .windows
         .iter()
@@ -157,6 +158,29 @@ pub fn golden_report() -> String {
         })
         .chain([loc.travel, loc.max_step]);
     writeln!(out, "video\tlocations\t{:016x}", hash(lf)).unwrap();
+
+    // Frame times on a coarse (15.625 ms) timestamp grid, with drops and a
+    // change from 30 to 20 fps, re-estimated from the camera's clock.
+    let mut g = SplitMix64::new(0xc10c);
+    let mut stamps = Vec::new();
+    for (fps, from, to) in [(30.0, 0.0, 5.0), (20.0, 5.0, 10.0)] {
+        let mut k = 0;
+        loop {
+            let t: f64 = from + k as f64 / fps;
+            if t >= to {
+                break;
+            }
+            if g.uniform() >= 0.02 {
+                stamps.push(((t + 0.007) / 0.015625).floor() * 0.015625);
+            }
+            k += 1;
+        }
+    }
+    let (fixed, cq) = regularise(&stamps, &ClockParams::default()).unwrap();
+    let cf = fixed.iter().copied().chain(cq.segments.iter().flat_map(|s| {
+        [s.start as f64, s.end as f64, s.period, s.rms_residual, s.max_residual, s.missing as f64, s.regular as u8 as f64]
+    }));
+    writeln!(out, "clock\tregularise\t{:016x}", hash(cf)).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.

@@ -20,6 +20,10 @@ pub struct QcSummary {
     pub effective_fps: f64,
     pub longest_gap: f64,
     pub dropped_fraction: f64,
+    /// Frame-rate changes during the trial, and the timestamp error removed
+    /// by re-estimating frame times (RMS, seconds).
+    pub rate_changes: Option<usize>,
+    pub clock_rms: Option<f64>,
     pub gain_min: Option<f64>,
     pub gain_max: Option<f64>,
     pub abrupt_changes: Option<usize>,
@@ -77,6 +81,8 @@ pub fn report_of(out: &TrialOutput, p: &PipelineParams, q: &QcParams, f: &Featur
             effective_fps: qc.ingest.effective_fps,
             longest_gap: qc.ingest.longest_gap,
             dropped_fraction: qc.dropped_fraction,
+            rate_changes: qc.rate_changes,
+            clock_rms: qc.clock_rms,
             gain_min: qc.gain_min,
             gain_max: qc.gain_max,
             abrupt_changes: qc.abrupt_changes,

@@ -9,6 +9,7 @@
 
 use wavscat_core::Error;
 
+use crate::clock::{regularise, ClockParams, ClockQc};
 use crate::ingest::{Ingest, IngestQc};
 use crate::phase::{analyse_at, CycleAnalysis, PhaseParams};
 use crate::preprocess::{detrend, preprocess, GainQc, PreprocessParams};
@@ -20,6 +21,9 @@ use crate::svd::{randomized_svd, SvdParams};
 /// Settings for every stage of [`analyse_trial`].
 #[derive(Debug, Clone)]
 pub struct PipelineParams {
+    /// Re-estimate frame times from the camera's regular clock; `None`
+    /// uses the timestamps as they came.
+    pub clock: Option<ClockParams>,
     pub preprocess: PreprocessParams,
     pub svd: SvdParams,
     /// Uniform rate the components are resampled to, in Hz.
@@ -34,6 +38,7 @@ pub struct PipelineParams {
 impl Default for PipelineParams {
     fn default() -> Self {
         PipelineParams {
+            clock: Some(ClockParams::default()),
             preprocess: PreprocessParams::default(),
             svd: SvdParams::default(),
             fs: 30.0,
@@ -49,6 +54,11 @@ impl Default for PipelineParams {
 #[derive(Debug, Clone)]
 pub struct TrialResult {
     pub ingest: IngestQc,
+    /// Frame times used, in seconds from the oldest frame: re-estimated from
+    /// the camera's clock unless that was turned off.
+    pub timestamps: Vec<f64>,
+    /// What re-estimating the frame times found, if it was done.
+    pub clock: Option<ClockQc>,
     pub gain: GainQc,
     /// Singular values of the preprocessed frames.
     pub singular_values: Vec<f64>,
@@ -80,8 +90,20 @@ pub struct TrialResult {
 
 /// Analyse the frames held by `ing`. Times in the result are seconds from
 /// the oldest held frame.
+/// The frame times to analyse with: `raw`, re-estimated from the camera's
+/// clock if `p.clock` asks for it.
+pub fn frame_times(raw: Vec<f64>, p: &PipelineParams) -> Result<(Vec<f64>, Option<ClockQc>), Error> {
+    match &p.clock {
+        Some(c) => {
+            let (t, qc) = regularise(&raw, c)?;
+            Ok((t, Some(qc)))
+        }
+        None => Ok((raw, None)),
+    }
+}
+
 pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Error> {
-    let ts = ing.timestamps();
+    let (ts, clock) = frame_times(ing.timestamps(), p)?;
     let (pre, gain) = preprocess(ing, &ts, &p.preprocess)?;
     // Loadings are always computed for QC; they leave only if requested.
     let mut svd_params = p.svd.clone();
@@ -122,6 +144,8 @@ pub fn analyse_trial(ing: &Ingest, p: &PipelineParams) -> Result<TrialResult, Er
 
     Ok(TrialResult {
         ingest: ing.qc(),
+        timestamps: ts,
+        clock,
         gain,
         singular_values: svd.singular_values,
         loading_spread,
@@ -153,9 +177,16 @@ pub struct TraceResult {
 /// distance between two hand landmarks, as [`analyse_trial`] analyses the
 /// selected video component: drift removed as each pixel's is, resampled to
 /// the same grid, its fundamental found the same way, and its cycles timed.
+///
+/// The frame times are re-estimated from the camera's clock as they are for
+/// video, so pass the trace's frames' own capture times, gaps and all.
 pub fn analyse_trace(timestamps: &[f64], values: &[f64], p: &PipelineParams) -> Result<TraceResult, Error> {
-    let clean = detrend(timestamps, values, p.preprocess.detrend_cutoff)?;
-    let u = resample(timestamps, &clean, p.fs, p.max_gap)?;
+    if values.len() != timestamps.len() {
+        return Err(Error("There must be one timestamp per value.".into()));
+    }
+    let (ts, _) = frame_times(timestamps.to_vec(), p)?;
+    let clean = detrend(&ts, values, p.preprocess.detrend_cutoff)?;
+    let u = resample(&ts, &clean, p.fs, p.max_gap)?;
     if let Some(g) = u.gaps.first() {
         return Err(Error(format!(
             "A gap in the trace from {:.3} s to {:.3} s is longer than {} s.",

@@ -238,6 +238,18 @@ pub fn canonical_params(pipeline: &PipelineParams, qc: &QcParams, p: &FeaturePar
     let opt = |v: Option<f64>| v.map_or("none".to_string(), |x| format!("{x:?}"));
     put("schema", FEATURE_SCHEMA_VERSION.to_string());
     put("numerics", wavscat_core::NUMERICS_VERSION.to_string());
+    match &pipeline.clock {
+        None => put("clock", "none".to_string()),
+        Some(c) => {
+            put("clock.half_window", c.half_window.to_string());
+            put("clock.drop_factor", format!("{:?}", c.drop_factor));
+            put("clock.change", format!("{:?}", c.change));
+            put("clock.change_frames", c.change_frames.to_string());
+            put("clock.min_segment", c.min_segment.to_string());
+            put("clock.max_rms", format!("{:?}", c.max_rms));
+            put("clock.max_missing", format!("{:?}", c.max_missing));
+        }
+    }
     let pp = &pipeline.preprocess;
     put("preprocess.detrend_cutoff", opt(pp.detrend_cutoff));
     put("preprocess.abrupt_change", format!("{:?}", pp.abrupt_change));

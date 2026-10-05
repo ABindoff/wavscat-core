@@ -20,6 +20,7 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
+use tapvid::clock::ClockQc;
 use tapvid::features::{trace_features, trial_features, FeatureParams};
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::locate::{locate, LocateParams, Locations};
@@ -161,11 +162,13 @@ impl TappingSession {
                 Ok(f) => (Some(Named { names: f.names, values: f.values }), None),
                 Err(e) => (None, Some(e.0)),
             };
-            let (locations, locate_error) = match locate(&self.ingest, r.f0_hz, &LocateParams::default()) {
+            let (locations, locate_error) = match locate(&self.ingest, &r.timestamps, r.f0_hz, &LocateParams::default()) {
                 Ok(l) => (Some(l), None),
                 Err(e) => (None, Some(e.0)),
             };
             Analysis {
+                frame_times: r.timestamps.clone(),
+                clock: r.clock.clone(),
                 usable: usable_mask(&r.cycles.itis, &r.cycles.amplitudes, self.qc.usable_iti_factor, self.qc.usable_min_amplitude),
                 locations,
                 locate_error,
@@ -328,6 +331,10 @@ struct Ranked {
 
 #[derive(Serialize)]
 struct Analysis {
+    /// Frame times used, seconds from the oldest frame: re-estimated from
+    /// the camera's clock.
+    frame_times: Vec<f64>,
+    clock: Option<ClockQc>,
     grid_width: usize,
     grid_height: usize,
     fs: f64,
@@ -358,7 +365,7 @@ struct Analysis {
 struct Diagnosis {
     report: TrialReport,
     analysis: Option<Analysis>,
-    /// Capture time of every held frame, seconds from the oldest.
+    /// Capture time of every held frame as stamped, seconds from the oldest.
     timestamps: Vec<f64>,
 }
 

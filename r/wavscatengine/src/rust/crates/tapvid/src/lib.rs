@@ -28,6 +28,7 @@
 //! [`synth_video`] generate signals and videos with known ground truth.
 #![forbid(unsafe_code)]
 
+pub mod clock;
 pub mod features;
 pub mod ingest;
 pub mod linalg;

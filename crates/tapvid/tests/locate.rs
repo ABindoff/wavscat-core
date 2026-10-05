@@ -23,7 +23,7 @@ fn run(spec: VideoSpec) -> (Locations, f64) {
         video.render(t, &mut frame, &mut work);
         ing.push_frame(&frame, w, w, h, (t * 1e6).round() as i64).unwrap();
     }
-    (locate(&ing, 3.0, &LocateParams::default()).unwrap(), times[0])
+    (locate(&ing, &ing.timestamps(), 3.0, &LocateParams::default()).unwrap(), times[0])
 }
 
 fn spec() -> VideoSpec {

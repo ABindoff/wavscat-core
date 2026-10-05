@@ -127,8 +127,13 @@ impl fmt::Display for Rejection {
 #[derive(Debug, Clone)]
 pub struct QcReport {
     pub ingest: IngestQc,
-    /// Fraction of frames dropped.
+    /// Fraction of frames dropped: from the camera's clock when frame times
+    /// were re-estimated (empty slots), otherwise from long intervals.
     pub dropped_fraction: f64,
+    /// Changes of frame rate during the trial, and the timestamp error the
+    /// clock fit removed (RMS, seconds); `None` without re-estimation.
+    pub rate_changes: Option<usize>,
+    pub clock_rms: Option<f64>,
     /// Exposure: darkest and brightest frame means, abrupt changes, dark
     /// frames. `None` when the analysis did not get that far.
     pub gain_min: Option<f64>,
@@ -207,10 +212,23 @@ impl TrialOutput {
 pub fn run_trial(ing: &Ingest, p: &PipelineParams, q: &QcParams) -> TrialOutput {
     let iq = ing.qc();
     let total = iq.frames_accepted + iq.frames_dropped;
-    let dropped_fraction = if total > 0 { iq.frames_dropped as f64 / total as f64 } else { 0.0 };
+    let mut dropped_fraction = if total > 0 { iq.frames_dropped as f64 / total as f64 } else { 0.0 };
+    // The camera's clock, if it fits, counts dropped frames properly: an
+    // interval of 1.5 frames on a coarse timestamp grid is not a drop.
+    let clock = match &p.clock {
+        Some(c) if ing.len() >= 3 => crate::clock::regularise(&ing.timestamps(), c).ok().map(|(_, q)| q),
+        _ => None,
+    };
+    if let Some(c) = &clock {
+        if c.segments.iter().any(|s| s.regular) {
+            dropped_fraction = c.missing_fraction;
+        }
+    }
     let mut qc = QcReport {
         ingest: iq.clone(),
         dropped_fraction,
+        rate_changes: clock.as_ref().map(|c| c.rate_changes),
+        clock_rms: clock.as_ref().map(|c| c.rms_residual),
         gain_min: None,
         gain_max: None,
         abrupt_changes: None,

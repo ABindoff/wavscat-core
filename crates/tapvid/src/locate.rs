@@ -87,12 +87,15 @@ pub struct Locations {
     pub max_step: f64,
 }
 
-/// Locate the tapping, at fundamental `f0_hz`, in the frames `ing` holds.
-pub fn locate(ing: &Ingest, f0_hz: f64, p: &LocateParams) -> Result<Locations, Error> {
+/// Locate the tapping, at fundamental `f0_hz`, in the frames `ing` holds,
+/// captured at `ts` seconds (one per frame; the analysis's frame times).
+pub fn locate(ing: &Ingest, ts: &[f64], f0_hz: f64, p: &LocateParams) -> Result<Locations, Error> {
     let (gw, gh) = ing.grid();
     let cells = gw * gh;
-    let ts = ing.timestamps();
     let n = ts.len();
+    if n != ing.len() {
+        return Err(Error("There must be one timestamp per frame.".into()));
+    }
     if n < 3 {
         return Err(Error("At least three frames are needed to locate the tapping.".into()));
     }
@@ -120,7 +123,7 @@ pub fn locate(ing: &Ingest, f0_hz: f64, p: &LocateParams) -> Result<Locations, E
         let end = start + window;
         let rows: Vec<usize> = (0..n).filter(|&r| ts[r] >= start && ts[r] <= end).collect();
         if rows.len() >= 3 {
-            windows.push(window_location(ing, &ts, &inv_gain, &rows, start, end, f0_hz, h, p.threshold, gw, gh));
+            windows.push(window_location(ing, ts, &inv_gain, &rows, start, end, f0_hz, h, p.threshold, gw, gh));
         }
         if end >= duration - 1e-9 {
             break;
