@@ -144,7 +144,7 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install testthat
-        run: Rscript -e 'install.packages("testthat")'
+        run: Rscript -e 'install.packages("testthat", repos = "https://cloud.r-project.org")'
       - name: Install wavscatengine
         run: R CMD INSTALL r/wavscatengine
       - name: engine_verify() from R
