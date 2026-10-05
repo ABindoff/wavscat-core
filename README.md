@@ -84,6 +84,8 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [ ] Video tapping pipeline (`crates/tapvid`). Done:
   - stage 1, streaming ingest into a box-averaged 64 x 48 ring buffer; no raw
     frame is retained and no frame allocates
+  - stage 2, exposure gain, centring and B-spline drift removal on true
+    timestamps, applied on the fly as an operator (no copy of the frames)
   - stage 3, randomized SVD: seeded, sign-fixed, f32 frames with f64
     accumulation
   - stage 4, resampling to a uniform grid on true timestamps
@@ -92,7 +94,7 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
   - stage 6, sub-frame inter-tap intervals from the analytic signal
   - the PRNG and synthetic ground truth
 
-  To do: stage 2 preprocessing, JTFS features, QC, the synthetic video
+  To do: JTFS features, QC, the synthetic video
   generator, and the wasm streaming API.
 - [ ] R binding through extendr; Python binding through PyO3
 

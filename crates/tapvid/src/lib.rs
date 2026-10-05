@@ -14,6 +14,7 @@
 //! Stages, as numbered in the design brief:
 //!
 //! - 1: [`ingest`], streaming frames into a ring buffer of small grids
+//! - 2: [`preprocess`], exposure gain, centring and drift, applied on the fly
 //! - 3: [`svd`], the leading temporal components, by randomized SVD
 //! - 4: [`resample`], irregular capture times to a uniform grid
 //! - 5: [`select`], the tapping component and its fundamental, from a
@@ -26,6 +27,7 @@
 pub mod ingest;
 pub mod linalg;
 pub mod phase;
+pub mod preprocess;
 pub mod resample;
 pub mod rng;
 pub mod select;

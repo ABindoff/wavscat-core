@@ -2,6 +2,9 @@
 rng	normal	4f08a1a62ac0f818
 ingest	frames	87af3523401cd180
 ingest	qc	f8dd5db8e87e7680
+preprocess	gain_trace	c65c4c077d65697c
+preprocess	gain_qc	524aa61f8e90113e
+preprocess	svd_scores	25a81ddce36cb2ad
 svd	singular_values	9ce3b78491c549b1
 svd	scores	a6e5ed983a4d5b89
 svd	loadings	9f46ee86a1fef0e0

@@ -10,12 +10,13 @@ use std::fmt::Write as _;
 
 use tapvid::ingest::{Ingest, IngestParams};
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
+use tapvid::preprocess::{preprocess, PreprocessParams};
 use tapvid::select::{periodicity, BandParams};
 use tapvid::spectrum::{welch, WelchParams};
 use tapvid::svd::{randomized_svd, DenseF32, SvdParams};
 use tapvid::resample::resample;
 use tapvid::rng::SplitMix64;
-use tapvid::synth::{render, FrameClock, TapSpec};
+use tapvid::synth::{frame_times, render, FrameClock, TapSpec};
 use wavscat_core::verify::{differences, hash};
 
 const RECORD: &str = include_str!("../golden.tsv");
@@ -53,6 +54,29 @@ fn report() -> String {
         qc.effective_fps, qc.longest_gap,
     ];
     writeln!(out, "ingest\tqc\t{:016x}", hash(qc_fields)).unwrap();
+
+    // Preprocessing on irregular timestamps, and the SVD of the result: a
+    // textured scene with an oscillating patch under a gain ramp and step.
+    let ts = frame_times(&FrameClock { jitter_sd: 0.004, drop_prob: 0.05, seed: 31, ..FrameClock::default() }, 20.0);
+    let (rows, cols) = (ts.len(), 120);
+    let mut g = SplitMix64::new(32);
+    let scene: Vec<f64> = (0..cols).map(|_| 60.0 + 80.0 * g.uniform()).collect();
+    let frames: Vec<f32> = (0..rows * cols)
+        .map(|i| {
+            let (r, c) = (i / cols, i % cols);
+            let t = ts[r];
+            let patch = if (30..50).contains(&c) { 15.0 * wavscat_core::math::sin(6.0 * std::f64::consts::PI * t) } else { 0.0 };
+            let gain = (1.0 + 0.01 * t) * if t > 10.0 { 1.4 } else { 1.0 };
+            (gain * (scene[c] + patch) + 0.5 * g.normal()) as f32
+        })
+        .collect();
+    let mat = DenseF32 { data: &frames, rows, cols };
+    let (pre, gain_qc) = preprocess(&mat, &ts, &PreprocessParams::default()).unwrap();
+    writeln!(out, "preprocess\tgain_trace\t{:016x}", hash(gain_qc.trace.iter().copied())).unwrap();
+    let gq = [gain_qc.min, gain_qc.max, gain_qc.abrupt_changes as f64, gain_qc.dark_frames as f64];
+    writeln!(out, "preprocess\tgain_qc\t{:016x}", hash(gq)).unwrap();
+    let svd = randomized_svd(&pre, &SvdParams::default()).unwrap();
+    writeln!(out, "preprocess\tsvd_scores\t{:016x}", hash(svd.scores.iter().flatten().copied())).unwrap();
 
     // The randomized SVD of a 300 x 500 f32 matrix: four structured
     // components plus noise, with the default seed and sign convention.
