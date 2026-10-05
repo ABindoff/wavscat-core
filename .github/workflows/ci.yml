@@ -51,6 +51,18 @@ jobs:
           for w in target/wasm32-wasip1/release/deps/golden-*.wasm; do
             node tools/run-wasi.mjs "$w"
           done
+      # WebAssembly SIMD roughly doubles the speed of the dense products. It
+      # must not change a bit: each lane does the scalar IEEE operations.
+      - name: Build the golden test with SIMD
+        env:
+          RUSTFLAGS: -C target-feature=+simd128
+        run: cargo test --release --target wasm32-wasip1 -p wavscat-core -p tapvid --test golden --no-run --target-dir target/simd
+      - name: Run it under WASI, SIMD build
+        shell: bash
+        run: |
+          for w in target/simd/wasm32-wasip1/release/deps/golden-*.wasm; do
+            node tools/run-wasi.mjs "$w"
+          done
 
   browsers:
     name: browsers (${{ matrix.os }})

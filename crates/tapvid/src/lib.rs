@@ -13,6 +13,7 @@
 //!
 //! Stages, as numbered in the design brief:
 //!
+//! - 3: [`svd`], the leading temporal components, by randomized SVD
 //! - 4: [`resample`], irregular capture times to a uniform grid
 //! - 5: [`select`], the tapping component and its fundamental, from a
 //!   [`spectrum`]
@@ -21,9 +22,11 @@
 //! [`synth`] generates recordings with known ground truth for testing.
 #![forbid(unsafe_code)]
 
+pub mod linalg;
 pub mod phase;
 pub mod resample;
 pub mod rng;
 pub mod select;
 pub mod spectrum;
+pub mod svd;
 pub mod synth;

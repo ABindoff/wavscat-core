@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use tapvid::phase::{analyse, analyse_at, PhaseParams};
 use tapvid::select::{periodicity, BandParams};
 use tapvid::spectrum::{welch, WelchParams};
+use tapvid::svd::{randomized_svd, DenseF32, SvdParams};
 use tapvid::resample::resample;
 use tapvid::rng::SplitMix64;
 use tapvid::synth::{render, FrameClock, TapSpec};
@@ -26,6 +27,28 @@ fn report() -> String {
     let mut g = SplitMix64::new(0x7a9);
     let draws: Vec<f64> = (0..10_000).map(|_| g.normal()).collect();
     writeln!(out, "rng\tnormal\t{:016x}", hash(draws)).unwrap();
+
+    // The randomized SVD of a 300 x 500 f32 matrix: four structured
+    // components plus noise, with the default seed and sign convention.
+    let (m, n) = (300usize, 500usize);
+    let mut g = SplitMix64::new(0x5bd);
+    let factors: Vec<f64> = (0..(m + n) * 4).map(|_| g.normal()).collect();
+    let data: Vec<f32> = (0..m * n)
+        .map(|idx| {
+            let (i, j) = (idx / n, idx % n);
+            let mut acc = 0.1 * g.normal();
+            for (k, s) in [8.0, 4.0, 2.0, 1.0].iter().enumerate() {
+                acc += s * factors[i * 4 + k] * factors[(m + j) * 4 + k] / 20.0;
+            }
+            acc as f32
+        })
+        .collect();
+    let p = SvdParams { return_loadings: true, ..SvdParams::default() };
+    let svd = randomized_svd(&DenseF32 { data: &data, rows: m, cols: n }, &p).unwrap();
+    writeln!(out, "svd\tsingular_values\t{:016x}", hash(svd.singular_values.iter().copied())).unwrap();
+    writeln!(out, "svd\tscores\t{:016x}", hash(svd.scores.iter().flatten().copied())).unwrap();
+    let loadings = svd.loadings.unwrap();
+    writeln!(out, "svd\tloadings\t{:016x}", hash(loadings.iter().flatten().copied())).unwrap();
 
     let spec = TapSpec {
         iti_sd: 0.012,
