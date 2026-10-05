@@ -41,3 +41,4 @@ pub mod spectrum;
 pub mod svd;
 pub mod synth;
 pub mod synth_video;
+pub mod verify;

@@ -86,7 +86,7 @@ jobs:
       - name: Build the wasm module
         run: sh tools/build-wasm.sh
       - name: Node tests of the binding
-        run: node --test crates/wavscat-wasm/js/test-node.mjs
+        run: node --test crates/wavscat-wasm/js/test-node.mjs crates/wavscat-wasm/js/test-tapping.mjs
       - name: Install Playwright browsers
         working-directory: crates/wavscat-wasm/js
         run: |

@@ -61,6 +61,34 @@ S.path(5);                        // one path's coefficients
 Parameter names are the R argument names, so one parameter set means the same
 thing in every language. Unknown names are rejected.
 
+### Webcam finger tapping
+
+`TappingSession` runs the whole video pipeline (`crates/tapvid`) on the
+participant's device. It keeps only a 64 x 48 grid of each frame:
+
+```js
+import init, { TappingSession, wasmMemory, verify } from "./wavscat_wasm.js";
+await init();
+const session = new TappingSession();
+
+// Each frame, with its capture time in microseconds. Either pass the luma
+// plane, or write it straight into wasm memory with no intermediate copy:
+const ptr = session.stagingPointer(byteLength);
+await videoFrame.copyTo(new Uint8Array(wasmMemory().buffer, ptr, byteLength), { rect, layout });
+session.pushStaged(stride, width, height, timestampUs, /* rgba */ false);
+
+// At the end of the trial:
+const report = session.finish();
+// { accepted, reasons, qc, features: { names, values, params_hash, ... }, itis }
+```
+
+The staging buffer is zeroed after every push, so no raw frame stays even in
+wasm memory. On a laptop under V8, pushing a 320 x 240 frame takes 0.06 ms
+and `finish()` on a 30 s trial about 100 ms; peak wasm memory for 30 s of
+HD frames is under 27 MB. The build uses WebAssembly SIMD, which changes no
+output bit; set `WAVSCAT_WASM_SIMD=0` when running `tools/build-wasm.sh` to
+support browsers from before 2023.
+
 To refresh the fixtures from the R package, run
 `Rscript tools/export-fixtures.R ../wavscat/tests/testthat/fixtures fixtures`.
 
@@ -81,33 +109,23 @@ needs a `NUMERICS_VERSION` bump and a new golden record.
 - [x] wasm-bindgen binding, a device self-check, and CI across targets and browsers
 - [x] JTFS renormalisation: each second-order path divided by S1 of the bands
       it spans, through the same frequential low-pass
-- [ ] Video tapping pipeline (`crates/tapvid`). Done:
-  - stage 1, streaming ingest into a box-averaged 64 x 48 ring buffer; no raw
-    frame is retained and no frame allocates
-  - stage 2, exposure gain, centring and B-spline drift removal on true
-    timestamps, applied on the fly as an operator (no copy of the frames)
-  - stage 3, randomized SVD: seeded, sign-fixed, f32 frames with f64
-    accumulation
-  - stage 4, resampling to a uniform grid on true timestamps
-  - stage 5, component selection and f0, with phase locking to detect a
-    dominant second harmonic
-  - stage 6, sub-frame inter-tap intervals from the analytic signal
-  - cross-component harmonic analysis: a component carrying a harmonic of
-    the hand, or of slow motion such as a sway, is recognised as such
-  - `analyse_trial`, stages 2 to 6 end to end over a captured trial
-  - the PRNG, and synthetic ground truth: signals, and videos of a moving
-    blob with noise, gain drift, an exposure step and distractors
-
-  - stage 8, QC gating: a report for every trial, rejection reasons for
+- [x] Video tapping pipeline (`crates/tapvid`), every stage of the brief:
+  - 1, streaming ingest into a box-averaged 64 x 48 ring buffer; no raw frame
+    is retained and no frame allocates
+  - 2, exposure gain, centring and B-spline drift removal on true
+    timestamps, applied on the fly (no copy of the frames)
+  - 3, randomized SVD: seeded, sign-fixed, f32 frames with f64 accumulation
+  - 4, resampling to a uniform grid on true timestamps
+  - 5, component selection and f0, with phase locking across components to
+    recognise harmonics of the hand and of slow motion such as a sway
+  - 6, sub-frame inter-tap intervals from the analytic signal
+  - 7, the feature vector: interval and amplitude features plus JTFS of the
+    unit-RMS component, stamped with versions and a hash of every parameter
+  - 8, QC gating: a report for every trial, with rejection reasons for
     capture, lighting, interruption, weak or competing rhythm and diffuse
-    motion, with every threshold a parameter
-
-  - stage 7, the feature vector: interval and amplitude features plus JTFS
-    of the unit-RMS component, renormalised and log-compressed, stamped
-    with schema, crate and numerics versions and a hash of every parameter
-
-  To do:
-  and the wasm streaming API.
+    motion, every threshold a parameter
+  - `analyse_trial` and `run_trial` end to end, synthetic signals and videos
+    with known ground truth, and the wasm `TappingSession`
 - [ ] R binding through extendr; Python binding through PyO3
 
 ## Licence

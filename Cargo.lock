@@ -221,6 +221,7 @@ dependencies = [
  "js-sys",
  "serde",
  "serde-wasm-bindgen",
+ "tapvid",
  "wasm-bindgen",
  "wavscat-core",
 ]

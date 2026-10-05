@@ -18,6 +18,8 @@
 //! const row = S.path(3);                 // one path's coefficients
 //! ```
 
+mod tapping;
+
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -25,7 +27,7 @@ use wavscat_core::features::{self, Summary};
 use wavscat_core::jtfs::{self, Format, OutType, ParamsJtfs};
 use wavscat_core::scattering1d::{self as s1d, Params1d, TSpec};
 
-fn js_err(e: impl std::fmt::Display) -> JsError {
+pub(crate) fn js_err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
 
@@ -41,7 +43,9 @@ pub fn numerics_version() -> String {
 /// device computes exactly what every other supported platform computes.
 #[wasm_bindgen]
 pub fn verify() -> Vec<String> {
-    wavscat_core::verify::verify()
+    let mut diffs: Vec<String> = wavscat_core::verify::verify().into_iter().map(|d| format!("wavscat-core: {d}")).collect();
+    diffs.extend(tapvid::verify::verify().into_iter().map(|d| format!("tapvid: {d}")));
+    diffs
 }
 
 /// The golden report itself, for diagnostics when `verify()` fails.
@@ -190,7 +194,7 @@ const JTFS_KEYS: &[&str] = &[
 ///
 /// serde-wasm-bindgen only ever reads the fields it expects, so serde's
 /// `deny_unknown_fields` never sees a misspelt key; check them here instead.
-fn parse<T: for<'de> Deserialize<'de>>(params: JsValue, allowed: &[&str]) -> Result<T, JsError> {
+pub(crate) fn parse<T: for<'de> Deserialize<'de>>(params: JsValue, allowed: &[&str]) -> Result<T, JsError> {
     if let Some(obj) = params.dyn_ref::<js_sys::Object>() {
         for key in js_sys::Object::keys(obj).iter() {
             let key = key.as_string().unwrap_or_default();
