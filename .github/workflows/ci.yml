@@ -144,7 +144,11 @@ jobs:
         with:
           use-public-rspm: true
       - name: Install testthat
-        run: Rscript -e 'install.packages("testthat", repos = "https://cloud.r-project.org")'
+        # Keep the binary mirror setup-r configures (RSPM on Linux); fall back to
+        # CRAN where no mirror is set. Fail here, not later, if it didn't install.
+        run: >-
+          Rscript -e 'r <- getOption("repos"); if (is.null(r) || any(r == "@CRAN@")) r <- "https://cloud.r-project.org";
+          install.packages("testthat", repos = r); library(testthat)'
       - name: Install wavscatengine
         run: R CMD INSTALL r/wavscatengine
       - name: engine_verify() from R
