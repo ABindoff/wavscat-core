@@ -1,0 +1,19 @@
+# wavscat-core golden hashes, numerics 0.1.0-dev
+tapping-1800-J8-Tsec1	coefs	22ebf7fd12599988
+tapping-1800-J8-Tsec1	Mean	89fbc66c330c25f7
+tapping-1800-J8-Tsec1	Sd	0de6bceb03e595a6
+tapping-1800-J8-Tsec1	Median	a0ab9eedb6f892ab
+tapping-1800-J8-Tsec1	Max	6067aa9fd8e84079
+audio-32000-J9-Q8	coefs	c420700fd756b80e
+audio-32000-J9-Q8	Mean	770ec46079492612
+audio-32000-J9-Q8	Sd	78b11c8f59fa9bd9
+audio-32000-J9-Q8	Median	653c6561c014e373
+audio-32000-J9-Q8	Max	2cb8762c1dd52975
+global-2048-J6	coefs	61c567dbd5b6212d
+unaveraged-1500-J6	coefs	4126b78d094d001a
+strided-4096-J7	coefs	c4a517ddc869b6bd
+strided-4096-J7	Mean	9a6abb6b459db7be
+strided-4096-J7	Sd	ba90bdfa82a7efcc
+strided-4096-J7	Median	24185285258777b0
+strided-4096-J7	Max	b66b1aade1328aad
+order1-3000-J6-Q12	coefs	c83545c93d4e683b

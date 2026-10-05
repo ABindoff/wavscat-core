@@ -1,0 +1,15 @@
+[package]
+name = "wavscat-core"
+description = "Deterministic wavelet scattering transforms, bit-for-bit identical on every target"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pinned exactly: a libm upgrade can change the last bit of exp or cos, which
+# is a change to the numerics and must be deliberate. `arch` is off so that no
+# target substitutes a hardware instruction for the software routine.
+libm = { version = "=0.2.16", default-features = false }

@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/wavscat-core"]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2021"
+license = "BSD-3-Clause"
+authors = ["Aidan D. Bindoff <aidan.bindoff@utas.edu.au>"]
+repository = "https://github.com/ABindoff/wavscat-core"
+rust-version = "1.77"
+
+[profile.release]
+# Rust never contracts a * b + c into a fused multiply-add on its own, and it
+# never reassociates floating-point sums. Nothing here may change that: no
+# fast-math flags, no target-cpu=native in shipped builds.
+opt-level = 3
