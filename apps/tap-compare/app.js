@@ -1,18 +1,21 @@
 // Webcam tapping: the landmark-free video pipeline (tapvid, through wasm)
 // against MediaPipe hand landmarks, on the same frames.
 //
-// Every captured frame goes to a TappingSession and to the hand landmarker,
-// with one timestamp. After a trial, each hand's landmark trace is analysed
-// by analyseTrace, which runs it through the same drift removal, resampling,
-// fundamental, cycle timing and features as the video's selected component,
-// so the two are compared like for like.
+// Every captured frame goes to a TappingSession at once, and a snapshot of
+// the same pixels goes to MediaPipe Hands in a worker, with one timestamp;
+// hand detection never delays capture. After a trial, each hand's landmark
+// trace is analysed by analyseTrace, which runs it through the same drift
+// removal, resampling, fundamental, cycle timing and features as the video's
+// selected component, so the two are compared like for like.
 import init, { TappingSession, analyseTrace, verify } from "../../crates/wavscat-wasm/pkg-web/wavscat_wasm.js";
-import { FilesetResolver, HandLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
 
-const MEDIAPIPE_WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
-const HAND_MODEL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 const RECORD_SEC = 10;
 const COUNTDOWN_SEC = 3;
+// Frames the landmark worker may fall behind by before frames are sent to it
+// no more; those frames get no landmarks, and the video keeps every frame.
+const MAX_PENDING = 15;
+// Preview frames hand tracking must process before Record is enabled.
+const WARMUP_FRAMES = 30;
 
 const TRIALS = [
   {
@@ -46,15 +49,23 @@ const COLOURS = { video: () => css("--video"), left: () => css("--left"), right:
 
 const state = {
   trialIndex: 0,
-  phase: "idle", // idle | preview | countdown | recording | analysing
-  landmarker: null,
+  phase: "idle", // idle | preview | countdown | recording | draining | analysing
+  worker: null,
+  delegate: null,
   session: null,
   canvas: null,
   ctx: null,
-  frames: [], // { us, hands: [{ x: Float32Array(21), y: Float32Array(21), label, score }] }
+  // { us, id, hands: null until the worker answers, then [{ x, y, label, score }] }
+  frames: [],
+  byId: new Map(),
+  nextId: 0,
+  pending: 0,
+  skipped: 0,
+  previewSeen: 0,
+  detectMs: [],
   firstUs: null,
   lastUs: null,
-  lastMpMs: -1,
+  lastMs: -1,
   phaseStart: 0,
   results: {},
   camera: null,
@@ -72,21 +83,20 @@ async function setup() {
   state.verified = bad.length === 0;
   status(state.verified ? "wasm loaded; this device reproduces every reference bit. Loading MediaPipe…"
     : `wasm loaded, but this device failed ${bad.length} reference checks. Loading MediaPipe…`);
-  const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM);
-  const opts = (delegate) => ({
-    baseOptions: { modelAssetPath: HAND_MODEL, delegate },
-    runningMode: "VIDEO",
-    numHands: 2,
-    minHandDetectionConfidence: 0.5,
-    minHandPresenceConfidence: 0.5,
-    minTrackingConfidence: 0.5,
+  state.worker = new Worker(new URL("landmarks-worker.js", import.meta.url), { type: "module" });
+  await new Promise((resolve, reject) => {
+    state.worker.onmessage = ({ data }) => {
+      if (data.type === "ready") {
+        state.delegate = data.delegate;
+        resolve();
+      } else if (data.type === "error") {
+        reject(new Error(data.message));
+      }
+    };
+    state.worker.onerror = (e) => reject(new Error(e.message || "the landmark worker failed to start"));
   });
-  try {
-    state.landmarker = await HandLandmarker.createFromOptions(vision, opts("GPU"));
-  } catch {
-    state.landmarker = await HandLandmarker.createFromOptions(vision, opts("CPU"));
-  }
-  status("Ready. Start the camera.");
+  state.worker.onmessage = ({ data }) => onLandmarks(data);
+  status(`Ready (MediaPipe on ${state.delegate}). Start the camera.`);
   $("start").disabled = false;
   renderChips();
   showTrial();
@@ -109,8 +119,7 @@ async function startCamera() {
   overlay.width = video.videoWidth;
   overlay.height = video.videoHeight;
   state.phase = "preview";
-  $("record").disabled = false;
-  status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}.`);
+  status(`Camera ${video.videoWidth} x ${video.videoHeight}${state.camera.frameRate ? ` at ${state.camera.frameRate} fps` : ""}. Warming up hand tracking…`);
   scheduleFrame();
 }
 
@@ -138,50 +147,105 @@ function scheduleFrame() {
   }
 }
 
+/// Send the frame now in the canvas to the landmark worker. The bitmap is
+/// transferred, not copied, and the canvas is left blank.
+function sendToWorker(id, tMs) {
+  const bitmap = state.canvas.transferToImageBitmap();
+  state.pending += 1;
+  state.worker.postMessage({ type: "frame", id, tMs, bitmap }, [bitmap]);
+}
+
 function onFrame(tMs) {
   const video = $("video");
-  if (tMs <= state.lastMpMs) return;
-  state.lastMpMs = tMs;
-  const res = state.landmarker.detectForVideo(video, tMs);
-  drawHands(res);
+  if (tMs <= state.lastMs) return;
+  state.lastMs = tMs;
+  const { width, height } = state.canvas;
 
-  const elapsed = (performance.now() - state.phaseStart) / 1000;
-  if (state.phase === "countdown") {
-    $("big").textContent = String(Math.max(1, Math.ceil(COUNTDOWN_SEC - elapsed)));
-    if (elapsed >= COUNTDOWN_SEC) {
-      state.phase = "recording";
-      state.phaseStart = performance.now();
-      $("big").textContent = "";
+  if (state.phase !== "recording") {
+    // Preview and countdown: landmarks only, for the overlay, and only when
+    // the worker is idle so that no backlog builds before recording.
+    if (state.pending === 0 && (state.phase === "preview" || state.phase === "countdown")) {
+      state.ctx.drawImage(video, 0, 0, width, height);
+      sendToWorker(-1, tMs);
+    }
+    if (state.phase === "countdown") {
+      const elapsed = (performance.now() - state.phaseStart) / 1000;
+      $("big").textContent = String(Math.max(1, Math.ceil(COUNTDOWN_SEC - elapsed)));
+      if (elapsed >= COUNTDOWN_SEC) {
+        state.phase = "recording";
+        state.phaseStart = performance.now();
+        $("big").textContent = "";
+      }
     }
     return;
   }
-  if (state.phase !== "recording") return;
 
   const us = Math.round(tMs * 1000);
   if (state.lastUs !== null && us <= state.lastUs) return;
-  const { width, height } = state.canvas;
   state.ctx.drawImage(video, 0, 0, width, height);
   const img = state.ctx.getImageData(0, 0, width, height);
   state.session.pushRgba(img.data, width * 4, width, height, us);
   img.data.fill(0);
   if (state.firstUs === null) state.firstUs = us;
   state.lastUs = us;
-  state.frames.push({
-    us,
-    hands: res.landmarks.map((lm, i) => ({
-      x: Float32Array.from(lm, (p) => p.x),
-      y: Float32Array.from(lm, (p) => p.y),
-      label: res.handedness[i]?.[0]?.categoryName ?? "",
-      score: res.handedness[i]?.[0]?.score ?? 0,
-    })),
-  });
+  const frame = { us, id: state.nextId++, hands: null };
+  state.frames.push(frame);
+  if (state.pending < MAX_PENDING) {
+    state.byId.set(frame.id, frame);
+    sendToWorker(frame.id, tMs);
+  } else {
+    state.skipped += 1;
+  }
+
+  const elapsed = (performance.now() - state.phaseStart) / 1000;
   $("progress").style.width = `${Math.min(100, (100 * elapsed) / RECORD_SEC)}%`;
   if (elapsed >= RECORD_SEC) {
-    state.phase = "analysing";
+    state.phase = "draining";
     $("progress").style.width = "100%";
-    status("Analysing…");
-    setTimeout(analyse, 0);
+    status("Waiting for the last landmarks…");
+    drain();
   }
+}
+
+function onLandmarks(data) {
+  if (data.type !== "landmarks") return;
+  state.pending -= 1;
+  drawHands(data);
+  if (data.id < 0) {
+    // Record becomes available once hand tracking has run steadily on the
+    // preview for a while: its first frames can stall the camera.
+    state.previewSeen += 1;
+    if (state.previewSeen === WARMUP_FRAMES && state.phase === "preview") {
+      $("record").disabled = false;
+      status(`${$("status").textContent.replace(" Warming up hand tracking…", "")} Ready to record.`);
+    }
+    return;
+  }
+  state.detectMs.push(data.ms);
+  const frame = state.byId.get(data.id);
+  if (!frame) return;
+  state.byId.delete(data.id);
+  frame.hands = data.landmarks.map((lm, i) => ({
+    x: Float32Array.from(lm, (p) => p.x),
+    y: Float32Array.from(lm, (p) => p.y),
+    label: data.handedness[i]?.[0]?.categoryName ?? "",
+    score: data.handedness[i]?.[0]?.score ?? 0,
+  }));
+}
+
+/// Analyse once the worker has answered for every frame sent to it.
+function drain() {
+  const start = performance.now();
+  const wait = () => {
+    if (state.byId.size === 0 || performance.now() - start > 10000) {
+      state.phase = "analysing";
+      status("Analysing…");
+      setTimeout(analyse, 0);
+    } else {
+      setTimeout(wait, 20);
+    }
+  };
+  wait();
 }
 
 function drawHands(res) {
@@ -210,6 +274,9 @@ function startRecording() {
   state.session?.free();
   state.session = new TappingSession();
   state.frames = [];
+  state.byId.clear();
+  state.skipped = 0;
+  state.detectMs = [];
   state.firstUs = null;
   state.lastUs = null;
   state.phase = "countdown";
@@ -229,6 +296,7 @@ function trackHands(frames) {
   const slots = { left: [], right: [] };
   const last = { left: null, right: null };
   for (const f of frames) {
+    if (!f.hands) continue;
     const hs = f.hands.map((h) => ({ ...h, wx: h.x[WRIST], wy: h.y[WRIST] }));
     let assign = {};
     if (hs.length >= 2) {
@@ -290,6 +358,12 @@ function differenceTrace(slots, firstUs) {
 // ---------------------------------------------------------------- comparison
 
 const mean = (v) => v.reduce((a, b) => a + b, 0) / v.length;
+const median = (v) => {
+  if (!v.length) return NaN;
+  const s = [...v].sort((a, b) => a - b);
+  const h = s.length >> 1;
+  return s.length % 2 ? s[h] : (s[h - 1] + s[h]) / 2;
+};
 
 function corr(a, b) {
   const ma = mean(a), mb = mean(b);
@@ -435,7 +509,11 @@ function analyse() {
     video: diag,
     landmarks: traces,
     comparisons,
-    landmark_frames: state.frames.map((f) => ({ us: f.us - state.firstUs, hands: f.hands.map((h) => ({ x: Array.from(h.x), y: Array.from(h.y), label: h.label, score: h.score })) })),
+    landmarks_skipped: state.skipped,
+    landmarks_missing: state.frames.filter((f) => !f.hands).length,
+    landmark_ms_median: median(state.detectMs),
+    mediapipe_delegate: state.delegate,
+    landmark_frames: state.frames.map((f) => ({ us: f.us - state.firstUs, skipped: !f.hands, hands: (f.hands ?? []).map((h) => ({ x: Array.from(h.x), y: Array.from(h.y), label: h.label, score: h.score })) })),
   };
   state.session.reset();
   state.phase = "preview";
@@ -445,7 +523,8 @@ function analyse() {
   $("record").disabled = false;
   $("next").disabled = state.trialIndex >= TRIALS.length - 1;
   $("download").disabled = false;
-  status(`Done: ${n} frames, analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
+  const missing = state.frames.filter((f) => !f.hands).length;
+  status(`Done: ${n} frames (${fmt(diag.report.qc.effective_fps, 1)} fps, ${fmt(100 * diag.report.qc.dropped_fraction, 0)}% dropped); landmarks for ${n - missing}, median ${fmt(median(state.detectMs), 0)} ms each on ${state.delegate}. Analysed in ${ms.toFixed(0)} ms. Record again, or go to the next trial.`);
 }
 
 /// Mean image position (0–1) of the wrist, thumb tip and index tip.
